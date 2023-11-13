@@ -1,5 +1,5 @@
-# LD2
-This is the code for *"LD2: Scalable Heterophilous Graph Neural Network with Decoupled Embeddings"*, NeurIPS 2023.
+# LD²
+This is the code for *"LD²: Scalable Heterophilous Graph Neural Network with Decoupled Embeddings"*, NeurIPS 2023.
 
 [Conference Page - Poster/Video/Slides](https://neurips.cc/virtual/2023/poster/72677) | [OpenReview](https://openreview.net/forum?id=7zkFc9TGKz) | [GitHub](https://github.com/gdmnl/LD2)
 

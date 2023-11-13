@@ -1,0 +1,37 @@
+{
+    "data": "actor",
+    "path": "../data",
+    "algo": "ld2",
+    "epochs": 500,
+    "patience": 50,
+    "batch": 2048,
+    "lr": 0.01,
+    "weight_decay": 1e-5,
+    "layer": 3,
+    "hidden": 256,
+    "dropout": 0.5,
+    "fusion": "cat",
+    "bias": "biasbn",
+    "inductive": false,
+    "multil": false,
+    "chn": {
+        "aseadj2": {
+            "hop": 20,
+            "l": 0,
+            "r": 512
+        },
+        "attr": {},
+        "featadj2": {
+            "hop": 16,
+            "rrz": 0.1
+        },
+        "featlap2": {
+            "hop": 4,
+            "rrz": 0.9
+        },
+        "featlapi": {
+            "hop": 2,
+            "rrz": 1.0
+        }
+    }
+}
