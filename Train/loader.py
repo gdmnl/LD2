@@ -79,7 +79,7 @@ def load_hetero_list(datastr: str, datapath: str,
     n, m = processor.n, processor.m
     # print(processor)
 
-    def load_file(alg: str, est_name: str):
+    def load_est(alg: str, est_name: str):
         if '-directed' in datastr and est_name.startswith('ase'):
             undatastr = '-'.join(datastr.split('-')[:-1])
             est_dir = f'../save/{undatastr}/{alg}'
@@ -108,7 +108,7 @@ def load_hetero_list(datastr: str, datapath: str,
             dct.delta = delta
             logdelta = int(-np.log10(delta))
             est_name = f"{chn}_l{int(dct.hop):d}_m{dct.r-dct.l:g}_eps{logdelta:d}_{seed:g}"
-            feat, est_file = load_file('a2prop', est_name)
+            feat, est_file = load_est('a2prop', est_name)
             if feat is None or feat.shape[1] < dct.r - dct.l:
                 print(f'Calculating {chn} {dct}...', flush=True)
                 feat = np.zeros((processor.n, dct.r-dct.l), dtype=np.float32, order='C')
@@ -125,14 +125,14 @@ def load_hetero_list(datastr: str, datapath: str,
             if idxz.size > 0:
                 rr = idxz[idxz >= max(0, feat.shape[1] - len(idxz))].min()
                 feat = feat[:, :rr]
-            feat = matstd_clip(feat, idx_fit, with_mean=True)
+            feat = matstd_clip(feat, idx_fit, with_mean=stdmean)
         elif chn.startswith('feat'):
             dct = chn_dct[chn]
             delta = dct.delta if type(dct.delta) is float else 1e-5
             dct.delta = delta
             logdelta = int(-np.log10(delta))
             est_name = f"{chn}_l{int(dct.hop):d}_r{dct.rrz:g}_eps{logdelta:d}_{seed:g}"
-            feat, est_file = load_file('a2prop', est_name)
+            feat, est_file = load_est('a2prop', est_name)
             if feat is None:
                 print(f'Calculating {chn} {dct}...', flush=True)
                 processor.input(['attr_matrix'])
@@ -142,7 +142,7 @@ def load_hetero_list(datastr: str, datapath: str,
                                         processor.m, processor.n, seed,
                                         dct.hop, delta, 0, 1-dct.rrz, dct.rrz, feat)
                 np.save(est_file, feat)
-            feat = matstd_clip(feat, idx_fit, with_mean=True)
+            feat = matstd_clip(feat, idx_fit, with_mean=stdmean)
         else:
             raise ValueError(f'Unknown channel {chn}')
         # Append feature

@@ -120,16 +120,16 @@ def eval(ld, lb):
 # print('-' * 20, flush=True)
 # print('Start training...')
 torch.cuda.empty_cache()
-train_time = 0
-conv_epoch, acc_best = 0, 0
+time_train = 0
+epoch_conv, acc_best = 0, 0
 
 for epoch in range(args.epochs):
     loss_train, train_ep = train()
-    train_time += train_ep
+    time_train += train_ep
     acc_val, _, _, _ = eval(ld=feat['val'], lb=labels[idx['val']])
     scheduler.step(acc_val)
     if (epoch+1) % 1 == 0:
-        res = f"Epoch:{epoch:04d} | train loss:{loss_train:.4f}, val acc:{acc_val:.4f}, cost:{train_time:.4f}"
+        res = f"Epoch:{epoch:04d} | train loss:{loss_train:.4f}, val acc:{acc_val:.4f}, cost:{time_train:.4f}"
         print(res)
         # logger.print(res)
     is_best = (acc_val > acc_best)
@@ -137,9 +137,9 @@ for epoch in range(args.epochs):
         model_logger.save_mem()
         acc_best = acc_val
     # Early stop if converge
-    conv_epoch = 0 if is_best else conv_epoch + 1
-    if conv_epoch == args.patience:
-        conv_epoch = epoch
+    epoch_conv = 0 if is_best else epoch_conv + 1
+    if epoch_conv == args.patience:
+        epoch_conv = epoch
         break
 
 model = model_logger.load_mem()
@@ -156,7 +156,7 @@ print(f'Test acc: {acc_test:.4f}', flush=True)
 memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 mem_cuda = torch.cuda.max_memory_allocated(args.dev)
 acc_train, _, _, _ = eval(ld=feat['train'], lb=labels[idx['train']])
-print(f"Train time cost: {train_time:0.4f}, Best epoch: {conv_epoch}, Epoch avg: {train_time*1000 / (epoch+1):0.1f}")
+print(f"Train time cost: {time_train:0.4f}, Best epoch: {epoch_conv}, Epoch avg: {time_train*1000 / (epoch+1):0.1f}")
 print(f"Train best acc: {acc_train:0.4f}, Val best acc: {acc_best:0.4f}", flush=True)
 print(f"Test time cost: {time_inf:0.4f}, eval time: {time_eval:0.4f}, RAM: {memory / 2**20:.3f} GB, CUDA: {mem_cuda / 2**30:.3f} GB")
 print(f"Num params (M): {get_num_params(model):0.4f}, Mem params (MB): {get_mem_params(model):0.4f}, Mem Feat (MB): {total_bytes / 2**20:0.4f}")

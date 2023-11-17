@@ -34,7 +34,7 @@ float get_stat_memory(){
     return rss * page_size_kb / 1000000.0;
 }
 
-void update_maxr(float r, float &maxpr, float &maxnr) {
+inline void update_maxr(const float r, float &maxpr, float &maxnr) {
     if (r > maxpr)
         maxpr = r;
     if (r < maxnr)
@@ -48,11 +48,10 @@ float A2prop::propagate(
         string dataset, string prop_alg, uint mm, uint nn, uint seedd,
         int LL, float rmaxx, float alphaa, float ra, float rb,
         Eigen::Map<Eigen::MatrixXf> &feat) {
-    int NUMTHREAD = 32;     // Number of threads
-    rmax = rmaxx;
     m = mm;
     n = nn;
     L = LL;                 // propagation hops
+    rmax = rmaxx;
     alpha = alphaa;         // $alpha$ in decaying summation
     rra = ra;               // left normalization
     rrb = rb;               // right normalization
@@ -86,12 +85,12 @@ float A2prop::propagate(
 
     // Feat is ColMajor, shape: (F dimension, n)
     int dimension = feat.rows();
-    random_w = vector<int>(dimension);
+    feat_map = vector<uint>(dimension);
     rowsum_pos = vector<float>(dimension, 0);
     rowsum_neg = vector<float>(dimension, 0);
     for (int i = 0; i < dimension; i++)
-        random_w[i] = i;
-    // random_shuffle(random_w.begin(),random_w.end());
+        feat_map[i] = i;
+    // random_shuffle(feat_map.begin(),feat_map.end());
     // cout << "feat size: " << feat.rows() << " " << feat.cols() << endl;
 
     Du   = vector<float>(n, 0);
@@ -124,7 +123,6 @@ float A2prop::propagate(
     int ends = 0;
 
     if (prop_alg == "aseadj2") {
-        std::size_t pos;
         aseadj2(feat, dimension, dimension);
     } else {
         vector<thread> threads;
@@ -160,7 +158,6 @@ float A2prop::propagate(
     cout << "Clock time: " << tclk << " \ts" << endl;
     cout << "Max   PRAM: " << get_proc_memory() << " \tGB, \t";
     cout << "End    RAM: " << get_stat_memory() << " \tGB" << endl;
-    // cout << ttod << "," << get_proc_memory() << endl;
 
     float dataset_size = (float)(((long long)m + n) * 4 + (long long)n * dimension * 8) / 1024.0 / 1024.0 / 1024.0;
     return dataset_size;
@@ -294,7 +291,7 @@ void A2prop::featadj2(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
         residue[i] = new float[n];  // two residue array
     // Loop each feature `w`
     for (int it = st; it < ed; it++) {
-        int w = random_w[it];
+        int w = feat_map[it];
         float rowsum_p = rowsum_pos[w];
         float rowsum_n = rowsum_neg[w];
         float rmax_p = rowsum_p * rmax;
@@ -377,7 +374,7 @@ void A2prop::featlap2(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
         residue[i] = new float[n];  // two residue array
     // Loop each feature `w`
     for (int it = st; it < ed; it++) {
-        int w = random_w[it];
+        int w = feat_map[it];
         float rowsum_p = rowsum_pos[w];
         float rowsum_n = rowsum_neg[w];
         float rmax_p = rowsum_p * rmax;
@@ -460,7 +457,7 @@ void A2prop::featlapi(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
         residue[i] = new float[n];  // two residue array
     // Loop each feature `w`
     for (int it = st; it < ed; it++) {
-        int w = random_w[it];
+        int w = feat_map[it];
         float rowsum_p = rowsum_pos[w];
         float rowsum_n = rowsum_neg[w];
         float rmax_p = rowsum_p * rmax;
@@ -491,6 +488,7 @@ void A2prop::featlapi(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
             }
 
             // Loop each node `ik`
+            cout << w <<" "<< MaxPR <<" "<< MaxNR << endl;
             for (uint ik = 0; ik < n; ik++) {
                 float old = residue[j][ik];
                 residue[j][ik] = 0;
@@ -531,5 +529,6 @@ void A2prop::featlapi(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
         delete[] residue[i];
     delete[] residue;
 }
+
 
 }  // namespace propagation

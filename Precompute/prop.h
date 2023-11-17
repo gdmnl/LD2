@@ -24,6 +24,7 @@
 #include <string>
 #include <unistd.h>
 #include <chrono>
+#include <omp.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #pragma warning(push, 0)
@@ -37,6 +38,7 @@ using namespace Spectra;
 typedef unsigned int uint;
 
 namespace propagation{
+    const int NUMTHREAD = 32;       // Number of threads
     class A2prop{
     public:
     	uint m,n,seed;  // edges and nodes
@@ -47,7 +49,7 @@ namespace propagation{
         vector<uint>pl;
         vector<float>rowsum_pos;
         vector<float>rowsum_neg;
-        vector<int>random_w;
+        vector<int>feat_map;
         vector<float>Du_a;
         vector<float>Du_b;
         vector<float>Du;

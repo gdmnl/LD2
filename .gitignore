@@ -1,5 +1,9 @@
 # Workspace specific
 backup/*
+save
+save/*
+data
+data/*
 
 # User specific
 try*
