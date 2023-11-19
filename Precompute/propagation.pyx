@@ -7,27 +7,27 @@ cdef class A2Prop:
 	def __cinit__(self):
 		self.c_a2prop=A2prop()
 
-	def propagatea(self, dataset, schemes, unsigned int m, unsigned int n, unsigned int nsch, unsigned int seed, np.ndarray feat):
+	def propagatea(self, dataset, chns, unsigned int m, unsigned int n, unsigned int nchn, unsigned int seed, np.ndarray feat):
 		cdef:
-			Channel* schs = <Channel*> malloc(nsch * sizeof(Channel))
+			Channel* c_chns = <Channel*> malloc(nchn * sizeof(Channel))
 			float res
-		for i in range(nsch):
-			schs[i].type = schemes[i]['type']
+		for i in range(nchn):
+			c_chns[i].type = chns[i]['type']
             	# 0    1     2     3
             	# ADJ, ADJi, ADJ2, ADJi2,
             	# 4    5     6     7
             	# LAP, LAPi, LAP2, LAPi2
-			schs[i].powl = 1 + (schemes[i]['type'] // 2) % 2
-			schs[i].is_i   = (schemes[i]['type'] % 2 == 1)
-			schs[i].is_adj = (schemes[i]['type'] < 4)
+			c_chns[i].powl = 1 + (chns[i]['type'] // 2) % 2
+			c_chns[i].is_i   = (chns[i]['type'] % 2 == 1)
+			c_chns[i].is_adj = (chns[i]['type'] < 4)
 
-			schs[i].L = schemes[i]['L']
-			schs[i].rmax = schemes[i]['rmax']
-			schs[i].alpha = schemes[i]['alpha']
-			schs[i].rra = schemes[i]['rra']
-			schs[i].rrb = schemes[i]['rrb']
+			c_chns[i].L = chns[i]['L']
+			c_chns[i].rmax = chns[i]['rmax']
+			c_chns[i].alpha = chns[i]['alpha']
+			c_chns[i].rra = chns[i]['rra']
+			c_chns[i].rrb = chns[i]['rrb']
 
-		self.c_a2prop.load(dataset.encode(), m, n, nsch, seed, Map[MatrixXf](feat))
-		res = self.c_a2prop.propagatea(schs, Map[MatrixXf](feat))
-		free(schs)
+		self.c_a2prop.load(dataset.encode(), m, n, seed)
+		res = self.c_a2prop.propagatea(nchn, c_chns, Map[MatrixXf](feat))
+		free(c_chns)
 		return res

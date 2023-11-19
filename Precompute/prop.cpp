@@ -34,24 +34,21 @@ float get_stat_memory(){
     return rss * page_size_kb / 1000000.0;
 }
 
-inline void update_maxr(const float r, float &maxpr, float &maxnr) {
-    if (r > maxpr)
-        maxpr = r;
-    else if (r < maxnr)
-        maxnr = r;
+inline void update_maxr(const float r, float &maxrp, float &maxrn) {
+    if (r > maxrp)
+        maxrp = r;
+    else if (r < maxrn)
+        maxrn = r;
 }
 
 // ====================
 namespace propagation {
 
-void A2prop::load(
-        string dataset, uint mm, uint nn, uint nchnn, uint seedd,
-        Eigen::Map<Eigen::MatrixXf> &feat) {
+void A2prop::load(string dataset, uint mm, uint nn, uint seedd) {
     dataset_name = dataset;
     m = mm;
     n = nn;
     seed = seedd;
-    nchn = nchnn;
 
     // Load graph adjacency
     el = vector<uint>(m);   // edge list sorted by source node degree
@@ -78,54 +75,56 @@ void A2prop::load(
         cout << dataset_pl << " Not Exists." << endl;
         exit(1);
     }
-    Du   = vector<float>(n, 0);
+
+    Du = Eigen::ArrayXf::Zero(n);
     for (uint i = 0; i < n; i++) {
-        Du[i]   = pl[i + 1] - pl[i];
-        if (Du[i] <= 0) {
-            Du[i] = 1;
+        Du(i)   = pl[i + 1] - pl[i];
+        if (Du(i) <= 0) {
+            Du(i) = 1;
             // cout << i << " ";
         }
     }
 }
 
 
-float A2prop::propagatea(Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat) {
-    L = chnss[0].L;                 // propagation hops
-    rmax = chnss[0].rmax;
-    alpha = chnss[0].alpha;         // $alpha$ in decaying summation
-    rra = chnss[0].rra;               // left normalization
-    rrb = chnss[0].rrb;               // right normalization
-    Du_a = vector<float>(n, 0);
-    Du_b = vector<float>(n, 0);
-    for (uint i = 0; i < n; i++) {
-        Du_a[i] = pow(Du[i], rra);      // normalized degree
-        Du_b[i] = pow(Du[i], rrb);
+float A2prop::propagatea(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat) {
+    nchn = nchnn;
+    chns = chnss;
+    assert(nchn <= 4);
+    Du_a = Eigen::ArrayX4f::Zero(n, nchn);
+    for (uint c = 0; c < nchn; c++) {
+        Du_a.col(c) = Du.pow(chns[c].rra);
     }
 
-    // Feat is ColMajor, shape: (n, F)
+    // Feat is ColMajor, shape: (n, c*F)
     // cout << "feat dim: " << feat.cols() << ", nodes: " << feat.rows() << endl;
-    fdim = feat.cols() / nchn;
-    // cout  << "feat dim: " << feat.cols() << ", nodes: " << feat.cols() << endl;
-    rowsum_pos = vector<float>(fdim, 0);
-    rowsum_neg = vector<float>(fdim, 0);
-    for (uint i = 0; i < fdim; i++) {
-        for (uint u = 0; u < n; u++) {
-            if (feat(u, i) > 0)
-                rowsum_pos[i] += feat(u, i) * Du_b[u];
-            else
-                rowsum_neg[i] += feat(u, i) * Du_b[u];
-        }
-        if (rowsum_pos[i] == 0)
-            rowsum_pos[i] = 1e-12;
-        if (rowsum_neg[i] == 0)
-            rowsum_neg[i] = -1e-12;
-    }
-    feat_map = vector<uint>(fdim);
-    for (uint i = 0; i < fdim; i++)
+    const uint fsum = feat.cols();
+    assert(fsum % nchn == 0);
+    fdim = fsum / nchn;
+    feat_map = vector<uint>(fsum);
+    for (uint i = 0; i < fsum; i++)
         feat_map[i] = i;
     // random_shuffle(feat_map.begin(),feat_map.end());
 
-    chns = chnss;
+    dlt_p = Eigen::ArrayXf::Zero(fsum);
+    dlt_n = Eigen::ArrayXf::Zero(fsum);
+    for (uint c = 0; c < nchn; c++) {
+        for (uint i = 0; i < fdim; i++) {
+            uint it = i + c * fdim;
+            for (uint u = 0; u < n; u++) {
+                if (feat(u, i) > 0)
+                    dlt_p(it) += feat(u, it) * pow(Du(u), chns[c].rrb);
+                else
+                    dlt_n(it) += feat(u, it) * pow(Du(u), chns[c].rrb);
+            }
+            if (dlt_p(it) == 0)
+                dlt_p(it) = 1e-12;
+            if (dlt_n(it) == 0)
+                dlt_n(it) = -1e-12;
+            dlt_p(it) *= chns[c].rmax;
+            dlt_n(it) *= chns[c].rmax;
+        }
+    }
 
     // Begin propagation
     struct timeval ttod_start, ttod_end;
@@ -136,14 +135,14 @@ float A2prop::propagatea(Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat) {
     int start, ends = 0;
 
     vector<thread> threads;
-    for (ti = 1; ti <= fdim % NUMTHREAD; ti++) {
+    for (ti = 1; ti <= fsum % NUMTHREAD; ti++) {
         start = ends;
-        ends += ceil((float)fdim / NUMTHREAD);
+        ends += ceil((float)fsum / NUMTHREAD);
         threads.push_back(thread(&A2prop::feat_chn, this, feat, start, ends));
     }
     for (; ti <= NUMTHREAD; ti++) {
         start = ends;
-        ends += fdim / NUMTHREAD;
+        ends += fsum / NUMTHREAD;
         threads.push_back(thread(&A2prop::feat_chn, this, feat, start, ends));
     }
     for (int t = 0; t < NUMTHREAD; t++)
@@ -169,29 +168,30 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
     // Loop each feature `ift`, index `it`
     for (int it = st; it < ed; it++) {
         const uint ift = feat_map[it];
-        const Channel chn = chns[ift / fdim];
-        const float rmax_p = rowsum_pos[ift] * chn.rmax;
-        const float rmax_n = rowsum_neg[ift] * chn.rmax;
+        const uint ic = ift / fdim;
+        const Channel chn = chns[ic];
+        const float dlti_p = dlt_p(ift);
+        const float dlti_n = dlt_n(ift);
         Eigen::Map<Eigen::VectorXf> feati(feats.col(ift).data(), n);
+        Eigen::Map<Eigen::ArrayXf> Deg_a(Du_a.col(ic).data(), n);
 
         // Init residue
         res1.setZero();
-        // res0 = feats.col(ift);
-        // feati.setZero();
-        res0.setZero();
-        res0.swap(feats.col(ift));
+        res0 = feats.col(ift);
+        feati.setZero();
+        // res0.setZero();
+        // res0.swap(feats.col(ift));
         rprev = res1;
         rcurr = res0;
-        float MaxPR = res0.maxCoeff();  // max positive residue
-        float MaxNR = res0.minCoeff();  // max negative residue
+        float maxr_p = res0.maxCoeff();  // max positive residue
+        float maxr_n = res0.minCoeff();  // max negative residue
 
-        // cout << it << " " << ift << endl;
         // Loop each hop `il`
         int il;
         for (il = 0; il < chn.L; il++) {
             // Early termination
             // TODO: Terminate condition for all positive feat
-            if ((MaxPR <= rmax_p) && (MaxNR >= rmax_n))
+            if ((maxr_p <= dlti_p) && (maxr_n >= dlti_n))
                 break;
             rcurr.swap(rprev);
             rcurr.setZero();
@@ -199,8 +199,8 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
             // Loop each node `u`
             for (uint u = 0; u < n; u++) {
                 const float old = rprev[u];
-                float thr_p = old / rmax_p;
-                float thr_n = old / rmax_n;
+                float thr_p = old / dlti_p;
+                float thr_n = old / dlti_n;
                 // <<<<< suffix'i' (Identity) p-b i-d
                 if (chn.is_i)
                     rcurr[u] += old;
@@ -208,13 +208,15 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
                     uint im;
                     if ((chn.powl == 1) || (il % chn.powl == 1))
                         feati(u) += old;
+
                     // Loop each neighbor index `im`, node `v`
+                    const float old_t = (chn.is_adj) ? old : (-old);
                     for (im = pl[u]; im < pl[u+1]; im++) {
                         const uint v = el[im];
-                        const float da_v = Du_a[v];
+                        const float da_v = Deg_a(v);
                         if (thr_p > da_v || thr_n > da_v) {
-                            rcurr[v] -= old / Du[v];
-                            update_maxr(rcurr[v], MaxPR, MaxNR);
+                            rcurr[v] += old_t / Du[v];
+                            update_maxr(rcurr[v], maxr_p, maxr_n);
                         } else {
                             const float ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
                             thr_p /= ran;
@@ -222,15 +224,18 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
                             break;
                         }
                     }
+
+                    const float dlti_pt = (chn.is_adj) ? dlti_p : (-dlti_p);
+                    const float dlti_nt = (chn.is_adj) ? dlti_n : (-dlti_n);
                     for (; im < pl[u+1]; im++) {
                         const uint v = el[im];
-                        const float da_v = Du_a[v];
+                        const float da_v = Deg_a(v);
                         if (thr_p > da_v) {
-                            rcurr[v] -= rmax_p / da_v;
-                            update_maxr(rcurr[v], MaxPR, MaxNR);
+                            rcurr[v] += dlti_pt / da_v;
+                            update_maxr(rcurr[v], maxr_p, maxr_n);
                         } else if (thr_n > da_v) {
-                            rcurr[v] -= rmax_n / da_v;
-                            update_maxr(rcurr[v], MaxPR, MaxNR);
+                            rcurr[v] += dlti_nt / da_v;
+                            update_maxr(rcurr[v], maxr_p, maxr_n);
                         } else
                             break;
                     }
@@ -241,382 +246,15 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
             }
         }
 
-        // feati += rcurr;
-        rcurr += feati;
-        if (il % 2 == 1) {
-            res0 = res1;
-        }
-        res0.swap(feats.col(ift));
+        feati += rcurr;
+        // rcurr += feati;
+        // if (il % 2 == 1) {
+        //     res0 = res1;
+        // }
+        // res0.swap(feats.col(ift));
     }
 }
 
-
-// ====================
-// ASE(A^2)
-void A2prop::aseadj2(Eigen::Ref<Eigen::MatrixXf> feats, int st, int dimension) {
-    ApproxAdjProd op(*this);
-    assert(st <= feats.rows());
-    assert(L > 1);
-    int nev = min(st+(int)floor(st*2/L), op.rows());
-    SymEigsSolver<ApproxAdjProd> eigs(op, st, nev);
-
-    // Max iter L (max oper L*nev), relative error 1e-2
-    SortRule sorting;
-    sorting = SortRule::LargestAlge;
-    // sorting = SortRule::LargestMagn;
-    eigs.init();
-    int nconv = eigs.compute(sorting, L, 1e-2);
-
-    Eigen::VectorXf evalues;
-    evalues = eigs.eigenvalues();
-    feats = eigs.eigenvectors(feats.rows()).transpose();
-    for (int i = 0; i < feats.rows(); i++) {
-        if (i < nconv) {
-            feats.row(i) *= sqrtf(fabs(evalues[i]));
-        }
-        else {
-            feats.row(i).setZero();
-        }
-    }
-
-    // cout << "Eigenvalues: " << evalues.transpose() << endl;
-    cout << " Num iter: " << eigs.num_iterations() << " Num oper: " << eigs.num_operations();
-    cout << " Num conv: " << nconv << endl;
-}
-
-// ASE(A^2) mul
-void A2prop::prodadj2(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
-    uint seedt = seed;
-    float **residue = new float *[2];
-    for (int i = 0; i < 2; i++)
-        residue[i] = new float[n];  // two residue array, residue[j=L%2] for previous layer L-1, residue[k=1-L%2] for current layer L
-    // Loop each feature `w`
-    for (int it = st; it < ed; it++) {
-        int w = it;
-        float rowsum_p = 0;
-        float rowsum_n = 0;
-        for (uint j = 0; j < n; j++) {
-            if (feats(w, j) > 0)
-                rowsum_p += feats(w, j);
-            else
-                rowsum_n += feats(w, j);
-        }
-        float rmax_p = rowsum_p * rmax;
-        float rmax_n = rowsum_n * rmax;
-
-        // Init residue
-        float MaxPR = 0;  // max positive residue
-        float MaxNR = 0;  // max negative residue (absolute)
-        for (uint ik = 0; ik < n; ik++) {
-            residue[0][ik] = feats(w, ik) / Du_b[ik];
-            residue[1][ik] = 0;
-            update_maxr(residue[0][ik], MaxPR, MaxNR);
-            // feats(w, ik) = 0;
-            feats(w, ik) = - feats(w, ik) * Du[ik];
-        }
-
-        // Loop each hop `il`
-        uint j = 0, k = 0;
-        for (int il = 0; il <= 2; il++) {
-            j = il % 2;
-            k = 1 - j;
-            // Output
-            if (((MaxPR <= rmax_p) && (MaxNR >= rmax_n)) || (il == 2)) {
-                for (uint ik = 0; ik < n; ik++) {
-                    feats(w, ik) += residue[j][ik] * Du_b[ik];
-                }
-                break;
-            }
-
-            // Loop each node `ik`
-            for (uint ik = 0; ik < n; ik++) {
-                float old = residue[j][ik];
-                residue[j][ik] = 0;
-                if (old > rmax_p || old < rmax_n) {
-                    uint im, v;
-                    float ran;
-                    // >>>>> comment out to set diag to 0
-                    // residue[k][ik] -= old;
-                    // update_maxr(residue[k][ik], MaxPR, MaxNR);
-                    // <<<<<
-                    // Loop each neighbor index `im`, node `v`
-                    for (im = pl[ik]; im < pl[ik + 1]; im++) {
-                        v = el[im];
-                        if (old > rmax_p * Du_a[v] || old < rmax_n * Du_a[v]) {
-                            residue[k][v] += old;
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        }
-                        else {
-                            ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
-                            break;
-                        }
-                    }
-                    for (; im < pl[ik + 1]; im++) {
-                        v = el[im];
-                        if (ran * rmax_p * Du_a[v] < old) {
-                            residue[k][v] += rmax_p / Du_a[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else if (old < ran * rmax_n * Du_a[v]) {
-                            residue[k][v] += rmax_n / Du_a[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else
-                            break;
-                    }
-                }
-            }
-        }
-    }
-    for (int i = 0; i < 2; i++)
-        delete[] residue[i];
-    delete[] residue;
-}
-
-// sum A^2
-void A2prop::featadj2(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
-    uint seedt = seed;
-    float **residue = new float *[2];
-    for (int i = 0; i < 2; i++)
-        residue[i] = new float[n];  // two residue array
-    // Loop each feature `w`
-    for (int it = st; it < ed; it++) {
-        int w = feat_map[it];
-        float rowsum_p = rowsum_pos[w];
-        float rowsum_n = rowsum_neg[w];
-        float rmax_p = rowsum_p * rmax;
-        float rmax_n = rowsum_n * rmax;
-
-        // Init residue
-        float MaxPR = 0;  // max positive residue
-        float MaxNR = 0;  // max negative residue(consider absolute value)
-        for (uint ik = 0; ik < n; ik++) {
-            residue[0][ik] = feats(w, ik) / Du_b[ik];
-            residue[1][ik] = 0;
-            update_maxr(residue[0][ik], MaxPR, MaxNR);
-            feats(w, ik) = 0;
-            // feats(w, ik) = - feats(w, ik) / Du_b[ik];
-        }
-
-        // Loop each hop `il`
-        uint j = 0, k = 0;
-        for (int il = 0; il <= L; il++) {
-            j = il % 2;     // residue[j=L%2] for previous layer L-1
-            k = 1 - j;      // residue[k=1-j] for current layer L
-            // Output
-            if (((MaxPR <= rmax_p) && (MaxNR >= rmax_n)) || (il == L)) {
-                for (uint ik = 0; ik < n; ik++) {
-                    feats(w, ik) += residue[j][ik] * Du_b[ik];
-                }
-                break;
-            }
-
-            // Loop each node `ik`
-            for (uint ik = 0; ik < n; ik++) {
-                float old = residue[j][ik];
-                residue[j][ik] = 0;
-                if (old > rmax_p || old < rmax_n) {
-                    uint im, v;
-                    float ran;
-                    if (il % 2 == 1) {
-                        feats(w, ik) += old * Du_b[ik];
-                    }
-                    // Loop each neighbor index `im`, node `v`
-                    for (im = pl[ik]; im < pl[ik + 1]; im++) {
-                        v = el[im];
-                        if (old > rmax_p * Du_a[v] || old < rmax_n * Du_a[v]) {
-                            residue[k][v] += old / Du[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else {
-                            ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
-                            break;
-                        }
-                    }
-                    for (; im < pl[ik + 1]; im++) {
-                        v = el[im];
-                        if (ran * rmax_p * Du_a[v] < old) {
-                            residue[k][v] += rmax_p / Du_a[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else if (old < ran * rmax_n * Du_a[v]) {
-                            residue[k][v] += rmax_n / Du_a[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else
-                            break;
-                    }
-                } else {
-                    if (il % 2 == 1) {
-                        feats(w, ik) += old * Du_b[ik];
-                    }
-                }
-            }
-        }
-    }
-    for (int i = 0; i < 2; i++)
-        delete[] residue[i];
-    delete[] residue;
-}
-
-// sum L^2
-void A2prop::featlap2(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
-    uint seedt = seed;
-    float **residue = new float *[2];
-    for (int i = 0; i < 2; i++)
-        residue[i] = new float[n];  // two residue array
-    // Loop each feature `w`
-    for (int it = st; it < ed; it++) {
-        int w = feat_map[it];
-        float rowsum_p = rowsum_pos[w];
-        float rowsum_n = rowsum_neg[w];
-        float rmax_p = rowsum_p * rmax;
-        float rmax_n = rowsum_n * rmax;
-
-        // Init residue
-        float MaxPR = 0;  // max positive residue
-        float MaxNR = 0;  // max negative residue(consider absolute value)
-        for (uint ik = 0; ik < n; ik++) {
-            residue[0][ik] = feats(w, ik) / Du_b[ik];
-            residue[1][ik] = 0;
-            update_maxr(residue[0][ik], MaxPR, MaxNR);
-            feats(w, ik) = 0;
-            // feats(w, ik) = - feats(w, ik) / Du_b[ik];
-        }
-
-        // Loop each hop `il`
-        uint j = 0, k = 0;
-        for (int il = 0; il <= L; il++) {
-            j = il % 2;     // residue[j=L%2] for previous layer L-1
-            k = 1 - j;      // residue[k=1-j] for current layer L
-            // Output
-            if (((MaxPR <= rmax_p) && (MaxNR >= rmax_n)) || (il == L)) {
-                for (uint ik = 0; ik < n; ik++) {
-                    feats(w, ik) += residue[j][ik] * Du_b[ik];
-                }
-                break;
-            }
-
-            // Loop each node `ik`
-            for (uint ik = 0; ik < n; ik++) {
-                float old = residue[j][ik];
-                residue[j][ik] = 0;
-                if (old > rmax_p || old < rmax_n) {
-                    uint im, v;
-                    float ran;
-                    if (il % 2 == 1) {
-                        feats(w, ik) += old * Du_b[ik];
-                    }
-                    // Loop each neighbor index `im`, node `v`
-                    for (im = pl[ik]; im < pl[ik + 1]; im++) {
-                        v = el[im];
-                        if (old > rmax_p * Du_a[v] || old < rmax_n * Du_a[v]) {
-                            residue[k][v] -= old / Du[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else {
-                            ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
-                            break;
-                        }
-                    }
-                    for (; im < pl[ik + 1]; im++) {
-                        v = el[im];
-                        if (ran * rmax_p * Du_a[v] < old) {
-                            residue[k][v] -= rmax_p / Du_a[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else if (old < ran * rmax_n * Du_a[v]) {
-                            residue[k][v] -= rmax_n / Du_a[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else
-                            break;
-                    }
-                } else {
-                    if (il % 2 == 1) {
-                        feats(w, ik) += old * Du_b[ik];
-                    }
-                }
-            }
-        }
-    }
-    for (int i = 0; i < 2; i++)
-        delete[] residue[i];
-    delete[] residue;
-}
-
-// sum (L+I)
-void A2prop::featlapi(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
-    uint seedt = seed;
-    float **residue = new float *[2];
-    for (int i = 0; i < 2; i++)
-        residue[i] = new float[n];  // two residue array
-    // Loop each feature `w`
-    for (int it = st; it < ed; it++) {
-        int w = feat_map[it];
-        float rowsum_p = rowsum_pos[w];
-        float rowsum_n = rowsum_neg[w];
-        float rmax_p = rowsum_p * rmax;
-        float rmax_n = rowsum_n * rmax;
-
-        // Init residue
-        float MaxPR = 0;  // max positive residue
-        float MaxNR = 0;  // max negative residue(consider absolute value)
-        for (uint ik = 0; ik < n; ik++) {
-            residue[0][ik] = feats(w, ik) / Du_b[ik];
-            residue[1][ik] = 0;
-            update_maxr(residue[0][ik], MaxPR, MaxNR);
-            feats(w, ik) = 0;
-            // feats(w, ik) = - feats(w, ik) / Du_b[ik];
-        }
-
-        // Loop each hop `il`
-        uint j = 0, k = 0;
-        for (int il = 0; il <= L; il++) {
-            j = il % 2;     // residue[j=L%2] for previous layer L-1
-            k = 1 - j;      // residue[k=1-j] for current layer L
-            // Output
-            if (((MaxPR <= rmax_p) && (MaxNR >= rmax_n)) || (il == L)) {
-                for (uint ik = 0; ik < n; ik++) {
-                    feats(w, ik) += residue[j][ik] * Du_b[ik];
-                }
-                break;
-            }
-
-            // Loop each node `ik`
-            cout << w <<" "<< MaxPR <<" "<< MaxNR << endl;
-            for (uint ik = 0; ik < n; ik++) {
-                float old = residue[j][ik];
-                residue[j][ik] = 0;
-                residue[k][ik] += old;
-                if (old > rmax_p || old < rmax_n) {
-                    uint im, v;
-                    float ran;
-                    feats(w, ik) += old * Du_b[ik];
-                    // Loop each neighbor index `im`, node `v`
-                    for (im = pl[ik]; im < pl[ik + 1]; im++) {
-                        v = el[im];
-                        if (old > rmax_p * Du_a[v] || old < rmax_n * Du_a[v]) {
-                            residue[k][v] -= old / Du[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else {
-                            ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
-                            break;
-                        }
-                    }
-                    for (; im < pl[ik + 1]; im++) {
-                        v = el[im];
-                        if (ran * rmax_p * Du_a[v] < old) {
-                            residue[k][v] -= rmax_p / Du_a[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else if (old < ran * rmax_n * Du_a[v]) {
-                            residue[k][v] -= rmax_n / Du_a[v];
-                            update_maxr(residue[k][v], MaxPR, MaxNR);
-                        } else
-                            break;
-                    }
-                } else {
-                    feats(w, ik) += old * Du_b[ik];
-                }
-            }
-        }
-    }
-    for (int i = 0; i < 2; i++)
-        delete[] residue[i];
-    delete[] residue;
-}
 
 
 }  // namespace propagation

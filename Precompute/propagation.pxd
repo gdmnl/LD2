@@ -23,6 +23,6 @@ cdef extern from "prop.h" namespace "propagation":
 
     cdef cppclass A2prop:
         A2prop() except+
-        #         dataset,   m,    n, nsch, seed, feat
-        void load(string, uint, uint, uint, uint, Map[MatrixXf] &)
-        float propagatea(Channel*, Map[MatrixXf] &)
+        #         dataset,   m,    n, seed
+        void load(string, uint, uint, uint)
+        float propagatea(uint, Channel*, Map[MatrixXf] &)

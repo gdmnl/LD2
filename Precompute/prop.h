@@ -61,32 +61,22 @@ namespace propagation{
     	uint m,n,seed;  // edges and nodes
         uint fdim,nchn; // feature dimension, number of channels
         string dataset_name;
-        vector<uint>el;
-        vector<uint>pl;
-        vector<float>Du;
-        vector<uint>feat_map;
-        vector<float>rowsum_pos;
-        vector<float>rowsum_neg;
+        vector<uint> el;
+        vector<uint> pl;
+        vector<uint> feat_map;
 
         Channel* chns;
-        int L;
-    	float rmax,alpha,rra,rrb;
-        vector<float>Du_a;
-        vector<float>Du_b;
+        Eigen::ArrayXf Du;
+        Eigen::ArrayX4f Du_a;
+        Eigen::ArrayXf dlt_p, dlt_n;
 
-        void load(string dataset,uint mm,uint nn,uint nchnn,uint seedd,Eigen::Map<Eigen::MatrixXf> &feat);
-        float propagatea(Channel* chnss,Eigen::Map<Eigen::MatrixXf> &feat);
+        void load(string dataset, uint mm, uint nn, uint seedd);
+        float propagatea(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat);
         void feat_chn(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);
 
         void aseadj2 (Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // ASE(A^2)
         void prodadj2(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // ASE(A^2) mul
-        void featadj2(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // sum A^2
-        void featlap2(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // sum L^2
-        void featlapi(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // sum (L+I)
-        void featlapill(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);
-        void featlapi_one(Eigen::Ref<Eigen::MatrixXf>feats, float* res_old, float* res_new,
-                          float rmax_p, float rmax_n, float MaxPR, float MaxNR, int w, uint st, uint ed);
-    };
+};
 
     class ApproxAdjProd {
     public:
