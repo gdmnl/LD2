@@ -42,6 +42,8 @@ namespace propagation{
 
     struct Channel {               // channel scheme
         int type;
+			// -1		 -2
+			// ASE(ADJ), ASE(ADJ2)
             // 0    1     2     3
             // ADJ, ADJi, ADJ2, ADJi2,
             // 4    5     6     7
@@ -72,20 +74,17 @@ namespace propagation{
 
         void load(string dataset, uint mm, uint nn, uint seedd);
         float propagatea(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat);
-        void feat_chn(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);
 
-        void aseadj2 (Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // ASE(A^2)
-        void prodadj2(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // ASE(A^2) mul
-};
+        void feat_chn(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);
+        void aseadj2 (Eigen::Ref<Eigen::MatrixXf>feats,int ed);
+        void prod_chn(Eigen::Ref<Eigen::ArrayXf> feats);
+    };
 
     class ApproxAdjProd {
     public:
         using Scalar = float;
         A2prop &a2prop;
     private:
-        using sVector = Eigen::Matrix<Scalar, 1, Eigen::Dynamic>;
-        using MapConstVec = Eigen::Map<const sVector>;
-        using MapVec = Eigen::Map<sVector>;
 
     public:
         ApproxAdjProd(A2prop &a2prop) : a2prop(a2prop) {}
@@ -94,11 +93,15 @@ namespace propagation{
         int cols() const { return a2prop.n; }
 
         void perform_op(const Scalar* x_in, Scalar* y_out) const {
-            MapConstVec x(x_in, cols());
-            MapVec y(y_out, rows());
+            Eigen::Map<const ArrayXf> x(x_in, cols());
+            Eigen::Map<ArrayXf> y(y_out, rows());
             y = x;
-            a2prop.prodadj2(y, 0, 1);
+            a2prop.prod_chn(y);
         }
+
+        // TODO: https://spectralib.org/doc/classspectra_1_1densesymmatprod#a20efe97ecabc4d809ac10bfd1c1b0d53
+        // Eigen::MatrixXf operator*  (const Eigen::Ref<const Eigen::MatrixXf>& mat_in) const { }
+        // Scalar opertaor() (Eigen::Index i, Eigen::Index j) const { }
     };
 }
 

@@ -41,7 +41,7 @@ print(args.toDict())
 # logger.save_opt(args)
 model_logger = ModelLogger(logger, prefix='model'+args.suffix, state_only=True)
 
-feat, labels, idx = load_hetero_list(datastr=args.data, datapath=args.path,
+feat, labels, idx, time_pre = load_hetero_list(datastr=args.data, datapath=args.path,
             multil=args.multil, chn_dct=args.chn, seed=args.seed)
 nfeat = [feat['train'][i].shape[1] for i, _ in enumerate(args.chn)]
 nclass = labels.shape[1] if args.multil else int(labels.max()) + 1
@@ -156,6 +156,7 @@ print(f'Test acc: {acc_test:.4f}', flush=True)
 memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 mem_cuda = torch.cuda.max_memory_allocated(args.dev)
 acc_train, _, _, _ = eval(ld=feat['train'], lb=labels[idx['train']])
+print(f"Pre time cost: {time_pre:0.4f}")
 print(f"Train time cost: {time_train:0.4f}, Best epoch: {epoch_conv}, Epoch avg: {time_train*1000 / (epoch+1):0.1f}")
 print(f"Train best acc: {acc_train:0.4f}, Val best acc: {acc_best:0.4f}", flush=True)
 print(f"Test time cost: {time_inf:0.4f}, eval time: {time_eval:0.4f}, RAM: {memory / 2**20:.3f} GB, CUDA: {mem_cuda / 2**30:.3f} GB")

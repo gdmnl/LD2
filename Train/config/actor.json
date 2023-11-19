@@ -1,6 +1,6 @@
 {
     "data": "actor",
-    "path": "../data",
+    "path": "../data/",
     "algo": "ld2",
     "epochs": 500,
     "patience": 50,

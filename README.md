@@ -30,7 +30,7 @@ If you find this work useful, please cite our paper:
   * `labels.npz`: node label information
     * 'label': labels (number or one-hot)
     * 'idx_train/idx_val/idx_test': indices of training/validation/test nodes
-  * `adj_el.bin`, `adj_pl.bin`, `attribute.txt`: graph files for precomputation
+  * `adj_el.bin`, `adj_pl.bin`, `attribute.txt`, `deg.npz`: graph files for precomputation
 
 ### Precompute
 1. Environment: CMake 3.16, C++ 14. Dependencies: [eigen3](https://eigen.tuxfamily.org/index.php?title=Main_Page), [Spectra](https://spectralib.org)
@@ -40,9 +40,16 @@ If you find this work useful, please cite our paper:
 1. Install dependencies: `conda create --name [envname] --file requirements.txt`
 2. Run minibatch experiment: `python run_mini.py -f [seed] -c [config_file] -v [device]`
 
-## Baselines & Datasets
-[LINKX](https://github.com/CUAI/Non-Homophily-Large-Scale) | [GloGNN](https://github.com/RecklessRonan/GloGNN) | [ACM](https://github.com/SitaoLuan/ACM-GNN) | 
+## Reference & Links
+**Baselines**: [LINKX](https://github.com/CUAI/Non-Homophily-Large-Scale) | [GloGNN](https://github.com/RecklessRonan/GloGNN) | [ACM](https://github.com/SitaoLuan/ACM-GNN) | 
 [PPRGo](https://github.com/TUM-DAML/pprgo_pytorch) | [AGP](https://github.com/wanghzccls/AGP-Approximate_Graph_Propagation)
 
-[Yelp - GraphSAINT](https://github.com/GraphSAINT/GraphSAINT) | [Reddit - PPRGo](https://github.com/TUM-DAML/pprgo_pytorch) | [Amazon - Cluster-GCN](http://manikvarma.org/downloads/XC/XMLRepository.html) | 
+**Datasets**: [Yelp - GraphSAINT](https://github.com/GraphSAINT/GraphSAINT) | [Reddit - PPRGo](https://github.com/TUM-DAML/pprgo_pytorch) | [Amazon - Cluster-GCN](http://manikvarma.org/downloads/XC/XMLRepository.html) | 
 [tolokers](https://github.com/yandex-research/heterophilous-graphs) | [Others - LINKX](https://github.com/CUAI/Non-Homophily-Large-Scale)
+
+## TODOs
+NOTE (2023-11-20): the current version has different propagation computation due to some new optimization strategies, which may cause accuracy and speed differences. We will update the code soon. 
+
+* [ ] Adj propagation parallel and clocking
+* [ ] Unify feature and one-time propagation
+* [ ] Upload dataset configs 

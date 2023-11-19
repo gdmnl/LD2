@@ -96,9 +96,15 @@ float A2prop::propagatea(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf>
         Du_a.col(c) = Du.pow(chns[c].rra);
     }
 
-    // Feat is ColMajor, shape: (n, c*F)
     // cout << "feat dim: " << feat.cols() << ", nodes: " << feat.rows() << endl;
     const uint fsum = feat.cols();
+    if (chns[0].type < 0) {
+        // TODO: parallel and clocking
+        aseadj2(feat, fsum);
+        return 0;
+    }
+
+    // Feat is ColMajor, shape: (n, c*F)
     assert(fsum % nchn == 0);
     fdim = fsum / nchn;
     feat_map = vector<uint>(fsum);
@@ -159,7 +165,8 @@ float A2prop::propagatea(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf>
     return ttod;
 }
 
-
+// ====================
+// Feature embs
 void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
     uint seedt = seed;
     Eigen::VectorXf res0(n), res1(n);
@@ -215,7 +222,7 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
                         const uint v = el[im];
                         const float da_v = Deg_a(v);
                         if (thr_p > da_v || thr_n > da_v) {
-                            rcurr[v] += old_t / Du[v];
+                            rcurr[v] += old_t / Du(v);
                             update_maxr(rcurr[v], maxr_p, maxr_n);
                         } else {
                             const float ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
@@ -255,6 +262,113 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
     }
 }
 
+// ASE wrapper
+void A2prop::aseadj2(Eigen::Ref<Eigen::MatrixXf> feats, int ed) {
+    ApproxAdjProd op(*this);
+    assert(ed <= feats.cols());
+    int nev = min(ed+(int)floor(ed*2/chns[0].L), op.cols());
+    SymEigsSolver<ApproxAdjProd> eigs(op, ed, nev);
+
+    // Max iter L (max oper L*nev), relative error 1e-2
+    SortRule sorting = SortRule::LargestAlge;
+    // SortRule sorting = SortRule::LargestMagn;
+    eigs.init();
+    int nconv = eigs.compute(sorting, chns[0].L, 1e-2);
+
+    Eigen::VectorXf evalues;
+    evalues = eigs.eigenvalues();
+    feats = eigs.eigenvectors(feats.cols());
+    for (int i = 0; i < feats.cols(); i++) {
+        if (i < nconv) {
+            feats.col(i) *= sqrtf(fabs(evalues[i]));
+        }
+        else {
+            feats.col(i).setZero();
+        }
+    }
+
+    // cout << "Eigenvalues: " << evalues.transpose() << endl;
+    cout << " Num iter: " << eigs.num_iterations() << " Num oper: " << eigs.num_operations();
+    cout << " Num conv: " << nconv << endl;
+}
+
+// Graph power iteration
+void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feats) {
+    uint seedt = seed;
+    Eigen::ArrayXf res0(n), res1(n);
+    Eigen::Map<Eigen::ArrayXf> rprev(res1.data(), n), rcurr(res0.data(), n);
+
+    const uint ic = 0;
+    const Channel chn = chns[ic];
+    const float dlti_p = feats.cwiseMax(0).sum() * chn.rmax;
+    const float dlti_n = feats.cwiseMin(0).sum() * chn.rmax;
+    Eigen::Map<Eigen::ArrayXf> Deg_a(Du_a.col(ic).data(), n);
+    Eigen::ArrayXf Deg_b = Du.pow(chn.rrb);
+
+    // Init residue
+    res1.setZero();
+    res0 = feats / Deg_b;
+    feats *= -Du;
+    rprev = res1;
+    rcurr = res0;
+    float maxr_p = res0.maxCoeff();  // max positive residue
+    float maxr_n = res0.minCoeff();  // max negative residue
+
+    // Loop each hop `il`
+    int il;
+    for (il = 0; il < chn.powl; il++) {
+        // Early termination
+        // TODO: Terminate condition for all positive feat
+        if ((maxr_p <= dlti_p) && (maxr_n >= dlti_n))
+            break;
+        rcurr.swap(rprev);
+        rcurr.setZero();
+
+        // Loop each node `u`
+        for (uint u = 0; u < n; u++) {
+            const float old = rprev[u];
+            float thr_p = old / dlti_p;
+            float thr_n = old / dlti_n;
+
+            if (thr_p > 1 || thr_n > 1) {
+                uint im;
+
+                // Loop each neighbor index `im`, node `v`
+                const float old_t = (chn.is_adj) ? old : (-old);
+                for (im = pl[u]; im < pl[u+1]; im++) {
+                    const uint v = el[im];
+                    const float da_v = Deg_a(v);
+                    if (thr_p > da_v || thr_n > da_v) {
+                        rcurr[v] += old_t;
+                        update_maxr(rcurr[v], maxr_p, maxr_n);
+                    } else {
+                        const float ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
+                        thr_p /= ran;
+                        thr_n /= ran;
+                        break;
+                    }
+                }
+
+                const float dlti_pt = (chn.is_adj) ? dlti_p : (-dlti_p);
+                const float dlti_nt = (chn.is_adj) ? dlti_n : (-dlti_n);
+                for (; im < pl[u+1]; im++) {
+                    const uint v = el[im];
+                    const float da_v = Deg_a(v);
+                    if (thr_p > da_v) {
+                        rcurr[v] += dlti_pt / da_v;
+                        update_maxr(rcurr[v], maxr_p, maxr_n);
+                    } else if (thr_n > da_v) {
+                        rcurr[v] += dlti_nt / da_v;
+                        update_maxr(rcurr[v], maxr_p, maxr_n);
+                    } else
+                        break;
+                }
+            }
+        }
+    }
+
+    feats += rcurr;
+}
 
 
 }  // namespace propagation

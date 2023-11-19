@@ -13,13 +13,20 @@ cdef class A2Prop:
 			float res
 		for i in range(nchn):
 			c_chns[i].type = chns[i]['type']
+				# -1        -2
+				# ASE(ADJ), ASE(ADJ2)
             	# 0    1     2     3
             	# ADJ, ADJi, ADJ2, ADJi2,
             	# 4    5     6     7
             	# LAP, LAPi, LAP2, LAPi2
-			c_chns[i].powl = 1 + (chns[i]['type'] // 2) % 2
-			c_chns[i].is_i   = (chns[i]['type'] % 2 == 1)
-			c_chns[i].is_adj = (chns[i]['type'] < 4)
+			if c_chns[i].type >= 0:
+				c_chns[i].powl = 1 + (chns[i]['type'] // 2) % 2
+				c_chns[i].is_i   = (chns[i]['type'] % 2 == 1)
+				c_chns[i].is_adj = (chns[i]['type'] < 4)
+			else:
+				c_chns[i].powl   = -chns[i]['type']
+				c_chns[i].is_i   = False
+				c_chns[i].is_adj = (chns[i]['type'] > -3)
 
 			c_chns[i].L = chns[i]['L']
 			c_chns[i].rmax = chns[i]['rmax']
