@@ -4,6 +4,9 @@ save
 save/*
 data
 data/*
+data_*
+Precompute/propagation.cpp
+Precompute/Spectra
 
 # User specific
 try*

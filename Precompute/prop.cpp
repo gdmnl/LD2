@@ -37,30 +37,26 @@ float get_stat_memory(){
 inline void update_maxr(const float r, float &maxpr, float &maxnr) {
     if (r > maxpr)
         maxpr = r;
-    if (r < maxnr)
+    else if (r < maxnr)
         maxnr = r;
 }
 
 // ====================
 namespace propagation {
 
-float A2prop::propagate(
-        string dataset, string prop_alg, uint mm, uint nn, uint seedd,
-        int LL, float rmaxx, float alphaa, float ra, float rb,
+void A2prop::load(
+        string dataset, uint mm, uint nn, uint nchnn, uint seedd,
         Eigen::Map<Eigen::MatrixXf> &feat) {
+    dataset_name = dataset;
     m = mm;
     n = nn;
-    L = LL;                 // propagation hops
-    rmax = rmaxx;
-    alpha = alphaa;         // $alpha$ in decaying summation
-    rra = ra;               // left normalization
-    rrb = rb;               // right normalization
     seed = seedd;
-    dataset_name = dataset;
+    nchn = nchnn;
 
+    // Load graph adjacency
     el = vector<uint>(m);   // edge list sorted by source node degree
     pl = vector<uint>(n + 1);
-    string dataset_el = "../data/" + dataset + "/adj_el.bin";
+    string dataset_el = dataset + "/adj_el.bin";
     const char *p1 = dataset_el.c_str();
     if (FILE *f1 = fopen(p1, "rb")) {
         size_t rtn = fread(el.data(), sizeof el[0], el.size(), f1);
@@ -71,7 +67,7 @@ float A2prop::propagate(
         cout << dataset_el << " Not Exists." << endl;
         exit(1);
     }
-    string dataset_pl = "../data/" + dataset + "/adj_pl.bin";
+    string dataset_pl = dataset + "/adj_pl.bin";
     const char *p2 = dataset_pl.c_str();
     if (FILE *f2 = fopen(p2, "rb")) {
         size_t rtn = fread(pl.data(), sizeof pl[0], pl.size(), f2);
@@ -82,74 +78,77 @@ float A2prop::propagate(
         cout << dataset_pl << " Not Exists." << endl;
         exit(1);
     }
-
-    // Feat is ColMajor, shape: (F dimension, n)
-    int dimension = feat.rows();
-    feat_map = vector<uint>(dimension);
-    rowsum_pos = vector<float>(dimension, 0);
-    rowsum_neg = vector<float>(dimension, 0);
-    for (int i = 0; i < dimension; i++)
-        feat_map[i] = i;
-    // random_shuffle(feat_map.begin(),feat_map.end());
-    // cout << "feat size: " << feat.rows() << " " << feat.cols() << endl;
-
     Du   = vector<float>(n, 0);
-    Du_a = vector<float>(n, 0);
-    Du_b = vector<float>(n, 0);
     for (uint i = 0; i < n; i++) {
         Du[i]   = pl[i + 1] - pl[i];
         if (Du[i] <= 0) {
             Du[i] = 1;
             // cout << i << " ";
         }
+    }
+}
+
+
+float A2prop::propagatea(Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat) {
+    L = chnss[0].L;                 // propagation hops
+    rmax = chnss[0].rmax;
+    alpha = chnss[0].alpha;         // $alpha$ in decaying summation
+    rra = chnss[0].rra;               // left normalization
+    rrb = chnss[0].rrb;               // right normalization
+    Du_a = vector<float>(n, 0);
+    Du_b = vector<float>(n, 0);
+    for (uint i = 0; i < n; i++) {
         Du_a[i] = pow(Du[i], rra);      // normalized degree
         Du_b[i] = pow(Du[i], rrb);
     }
-    for (int i = 0; i < dimension; i++) {
-        for (uint j = 0; j < n; j++) {
-            if (feat(i, j) > 0)
-                rowsum_pos[i] += feat(i, j);
+
+    // Feat is ColMajor, shape: (n, F)
+    // cout << "feat dim: " << feat.cols() << ", nodes: " << feat.rows() << endl;
+    fdim = feat.cols() / nchn;
+    // cout  << "feat dim: " << feat.cols() << ", nodes: " << feat.cols() << endl;
+    rowsum_pos = vector<float>(fdim, 0);
+    rowsum_neg = vector<float>(fdim, 0);
+    for (uint i = 0; i < fdim; i++) {
+        for (uint u = 0; u < n; u++) {
+            if (feat(u, i) > 0)
+                rowsum_pos[i] += feat(u, i) * Du_b[u];
             else
-                rowsum_neg[i] += feat(i, j);
+                rowsum_neg[i] += feat(u, i) * Du_b[u];
         }
+        if (rowsum_pos[i] == 0)
+            rowsum_pos[i] = 1e-12;
+        if (rowsum_neg[i] == 0)
+            rowsum_neg[i] = -1e-12;
     }
+    feat_map = vector<uint>(fdim);
+    for (uint i = 0; i < fdim; i++)
+        feat_map[i] = i;
+    // random_shuffle(feat_map.begin(),feat_map.end());
+
+    chns = chnss;
 
     // Begin propagation
     struct timeval ttod_start, ttod_end;
     double ttod, tclk;
     gettimeofday(&ttod_start, NULL);
     tclk = getCurrentTime();
-    int ti, start;
-    int ends = 0;
+    uint ti;
+    int start, ends = 0;
 
-    if (prop_alg == "aseadj2") {
-        aseadj2(feat, dimension, dimension);
-    } else {
-        vector<thread> threads;
-        for (ti = 1; ti <= dimension % NUMTHREAD; ti++) {
-            start = ends;
-            ends += ceil((float)dimension / NUMTHREAD);
-            if (prop_alg == "featadj2")
-                threads.push_back(thread(&A2prop::featadj2, this, feat, start, ends));
-            else if (prop_alg == "featlap2")
-                threads.push_back(thread(&A2prop::featlap2, this, feat, start, ends));
-            else if (prop_alg == "featlapi")
-                threads.push_back(thread(&A2prop::featlapi, this, feat, start, ends));
-        }
-        for (; ti <= NUMTHREAD; ti++) {
-            start = ends;
-            ends += dimension / NUMTHREAD;
-            if (prop_alg == "featadj2")
-                threads.push_back(thread(&A2prop::featadj2, this, feat, start, ends));
-            else if (prop_alg == "featlap2")
-                threads.push_back(thread(&A2prop::featlap2, this, feat, start, ends));
-            else if (prop_alg == "featlapi")
-                threads.push_back(thread(&A2prop::featlapi, this, feat, start, ends));
-        }
-        for (int t = 0; t < NUMTHREAD; t++)
-            threads[t].join();
-        vector<thread>().swap(threads);
+    vector<thread> threads;
+    for (ti = 1; ti <= fdim % NUMTHREAD; ti++) {
+        start = ends;
+        ends += ceil((float)fdim / NUMTHREAD);
+        threads.push_back(thread(&A2prop::feat_chn, this, feat, start, ends));
     }
+    for (; ti <= NUMTHREAD; ti++) {
+        start = ends;
+        ends += fdim / NUMTHREAD;
+        threads.push_back(thread(&A2prop::feat_chn, this, feat, start, ends));
+    }
+    for (int t = 0; t < NUMTHREAD; t++)
+        threads[t].join();
+    vector<thread>().swap(threads);
 
     tclk = getCurrentTime() - tclk;
     gettimeofday(&ttod_end, NULL);
@@ -158,10 +157,99 @@ float A2prop::propagate(
     cout << "Clock time: " << tclk << " \ts" << endl;
     cout << "Max   PRAM: " << get_proc_memory() << " \tGB, \t";
     cout << "End    RAM: " << get_stat_memory() << " \tGB" << endl;
-
-    float dataset_size = (float)(((long long)m + n) * 4 + (long long)n * dimension * 8) / 1024.0 / 1024.0 / 1024.0;
-    return dataset_size;
+    return ttod;
 }
+
+
+void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
+    uint seedt = seed;
+    Eigen::VectorXf res0(n), res1(n);
+    Eigen::Map<Eigen::VectorXf> rprev(res1.data(), n), rcurr(res0.data(), n);
+
+    // Loop each feature `ift`, index `it`
+    for (int it = st; it < ed; it++) {
+        const uint ift = feat_map[it];
+        const Channel chn = chns[ift / fdim];
+        const float rmax_p = rowsum_pos[ift] * chn.rmax;
+        const float rmax_n = rowsum_neg[ift] * chn.rmax;
+        Eigen::Map<Eigen::VectorXf> feati(feats.col(ift).data(), n);
+
+        // Init residue
+        res1.setZero();
+        // res0 = feats.col(ift);
+        // feati.setZero();
+        res0.setZero();
+        res0.swap(feats.col(ift));
+        rprev = res1;
+        rcurr = res0;
+        float MaxPR = res0.maxCoeff();  // max positive residue
+        float MaxNR = res0.minCoeff();  // max negative residue
+
+        // cout << it << " " << ift << endl;
+        // Loop each hop `il`
+        int il;
+        for (il = 0; il < chn.L; il++) {
+            // Early termination
+            // TODO: Terminate condition for all positive feat
+            if ((MaxPR <= rmax_p) && (MaxNR >= rmax_n))
+                break;
+            rcurr.swap(rprev);
+            rcurr.setZero();
+
+            // Loop each node `u`
+            for (uint u = 0; u < n; u++) {
+                const float old = rprev[u];
+                float thr_p = old / rmax_p;
+                float thr_n = old / rmax_n;
+                // <<<<< suffix'i' (Identity) p-b i-d
+                if (chn.is_i)
+                    rcurr[u] += old;
+                if (thr_p > 1 || thr_n > 1) {
+                    uint im;
+                    if ((chn.powl == 1) || (il % chn.powl == 1))
+                        feati(u) += old;
+                    // Loop each neighbor index `im`, node `v`
+                    for (im = pl[u]; im < pl[u+1]; im++) {
+                        const uint v = el[im];
+                        const float da_v = Du_a[v];
+                        if (thr_p > da_v || thr_n > da_v) {
+                            rcurr[v] -= old / Du[v];
+                            update_maxr(rcurr[v], MaxPR, MaxNR);
+                        } else {
+                            const float ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
+                            thr_p /= ran;
+                            thr_n /= ran;
+                            break;
+                        }
+                    }
+                    for (; im < pl[u+1]; im++) {
+                        const uint v = el[im];
+                        const float da_v = Du_a[v];
+                        if (thr_p > da_v) {
+                            rcurr[v] -= rmax_p / da_v;
+                            update_maxr(rcurr[v], MaxPR, MaxNR);
+                        } else if (thr_n > da_v) {
+                            rcurr[v] -= rmax_n / da_v;
+                            update_maxr(rcurr[v], MaxPR, MaxNR);
+                        } else
+                            break;
+                    }
+                } else {
+                    if ((chn.powl == 1) || (il % chn.powl == 1))
+                        feati(u) += old;
+                }
+            }
+        }
+
+        // feati += rcurr;
+        rcurr += feati;
+        if (il % 2 == 1) {
+            res0 = res1;
+        }
+        res0.swap(feats.col(ift));
+    }
+}
+
 
 // ====================
 // ASE(A^2)

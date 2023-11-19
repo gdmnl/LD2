@@ -39,28 +39,53 @@ typedef unsigned int uint;
 
 namespace propagation{
     const int NUMTHREAD = 32;       // Number of threads
+
+    struct Channel {               // channel scheme
+        int type;
+            // 0    1     2     3
+            // ADJ, ADJi, ADJ2, ADJi2,
+            // 4    5     6     7
+            // LAP, LAPi, LAP2, LAPi2
+        int powl;       // suffix'2': hop for one prop
+        bool is_i;      // suffix'i': add identity
+        bool is_adj;    // 'ADJ' or 'LAP'
+
+        int L;          // propagation hop
+        float rmax;     // absolute error
+        float alpha;    // summation decay
+        float rra, rrb; // left & right normalization
+    };
+
     class A2prop{
     public:
     	uint m,n,seed;  // edges and nodes
-        int L;          // propagation levels
-    	float rmax,alpha,rra,rrb;
+        uint fdim,nchn; // feature dimension, number of channels
         string dataset_name;
         vector<uint>el;
         vector<uint>pl;
+        vector<float>Du;
+        vector<uint>feat_map;
         vector<float>rowsum_pos;
         vector<float>rowsum_neg;
-        vector<int>feat_map;
+
+        Channel* chns;
+        int L;
+    	float rmax,alpha,rra,rrb;
         vector<float>Du_a;
         vector<float>Du_b;
-        vector<float>Du;
-        float propagate(string dataset,string prop_alg,uint mm,uint nn,uint seedd,
-                        int LL,float rmaxx,float alphaa,float ra,float rb,
-                        Eigen::Map<Eigen::MatrixXf> &feat);
+
+        void load(string dataset,uint mm,uint nn,uint nchnn,uint seedd,Eigen::Map<Eigen::MatrixXf> &feat);
+        float propagatea(Channel* chnss,Eigen::Map<Eigen::MatrixXf> &feat);
+        void feat_chn(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);
+
         void aseadj2 (Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // ASE(A^2)
         void prodadj2(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // ASE(A^2) mul
         void featadj2(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // sum A^2
         void featlap2(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // sum L^2
         void featlapi(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);  // sum (L+I)
+        void featlapill(Eigen::Ref<Eigen::MatrixXf>feats,int st,int ed);
+        void featlapi_one(Eigen::Ref<Eigen::MatrixXf>feats, float* res_old, float* res_new,
+                          float rmax_p, float rmax_n, float MaxPR, float MaxNR, int w, uint st, uint ed);
     };
 
     class ApproxAdjProd {
