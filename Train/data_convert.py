@@ -87,4 +87,4 @@ print(dp.idx_train.shape, dp.idx_val.shape, dp.idx_test.shape)
 print(dp)
 
 dp.calculate(['deg'])
-dp.output(['adjnpz', 'attr_matrix', 'labels', 'adjl', 'attribute'])
+dp.output(['adjnpz', 'attr_matrix', 'labels', 'adjl', 'attribute', 'deg'])

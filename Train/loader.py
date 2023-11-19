@@ -55,6 +55,21 @@ def diag_mul(diag, m):
     return m
 
 
+def dmap2dct(chnname: str, dmap: DotMap):
+    typedct = {'aseadj': -1, 'aseadj2': -2,
+               'featadj': 0, 'featadji': 1, 'featadj2': 2, 'featadj2i': 3,
+               'featlap': 4, 'featlapi': 5, 'featlap2': 6, 'featlap2i': 7,}
+
+    dct = {}
+    dct['type'] = typedct[chnname]
+    dct['L'] = dmap.hop
+    dct['rmax'] =  dmap.delta if type(dmap.delta) is float else 1e-5
+    dct['alpha'] = dmap.alpha if type(dmap.alpha) is float else 0
+    dct['rra'] = (1 - dmap.rrz) if type(dmap.rrz) is float else 0
+    dct['rrb'] = dmap.rrz if type(dmap.rrz) is float else 0
+    return dct
+
+
 # ====================
 def load_hetero_list(datastr: str, datapath: str,
                    multil: bool, chn_dct: DotMap,
@@ -79,69 +94,57 @@ def load_hetero_list(datastr: str, datapath: str,
     n, m = processor.n, processor.m
     # print(processor)
 
-    def load_est(alg: str, est_name: str):
-        if '-directed' in datastr and est_name.startswith('ase'):
-            undatastr = '-'.join(datastr.split('-')[:-1])
-            est_dir = f'../save/{undatastr}/{alg}'
-        else:
-            est_dir = f'../save/{datastr}/{alg}'
-        est_file = f'{est_dir}/{est_name}.npy'
-        # if not est_name.startswith('ase'):
-        #     return None, est_file
-        if os.path.exists(est_file):
-            feat = np.load(est_file)
-            return feat, est_file
-        else:
-            os.makedirs(est_dir, exist_ok=True)
-            return None, est_file
-
     # Load feature
     idx_fit = idx['train']
     features = []
-    for chn in chn_dct:
-        if chn == 'attr':
+    time_pre = 0
+    for chnk, chnv in chn_dct.items():
+        if chnk == 'attr':
             feat = np.load(os.path.join(datapath, datastr, 'feats.npy'))
             feat = matstd_clip(feat, idx_fit, with_mean=stdmean)
-        elif chn.startswith('ase'):
-            dct = chn_dct[chn]
-            delta = dct.delta if type(dct.delta) is float else 1e-5
-            dct.delta = delta
-            logdelta = int(-np.log10(delta))
-            est_name = f"{chn}_l{int(dct.hop):d}_m{dct.r-dct.l:g}_eps{logdelta:d}_{seed:g}"
-            feat, est_file = load_est('a2prop', est_name)
-            if feat is None or feat.shape[1] < dct.r - dct.l:
-                print(f'Calculating {chn} {dct}...', flush=True)
-                feat = np.zeros((processor.n, dct.r-dct.l), dtype=np.float32, order='C')
-                py_a2prop = A2Prop()
-                _ = py_a2prop.propagate(datastr, chn,
-                                        processor.m, processor.n, seed,
-                                        dct.hop, delta, 0, 0, 0, feat)
-                np.save(est_file, feat)
-            else:
-                feat = feat[:, dct.l:dct.r]
+        # NOTE: rewrite to unify feature and call only once
+        elif chnk.startswith('ase'):
+            chns = [dmap2dct(chnk, DotMap(chnv))]
+            nchn = len(chns)
 
+            feat = np.zeros((chnv.r-chnv.l, processor.n), dtype=np.float32, order='C')
+            feat = np.repeat(feat, nchn, axis=0)
+            feat = np.ascontiguousarray(feat)
+            py_a2prop = A2Prop()
+            time_pre += py_a2prop.propagatea(os.path.join(datapath, datastr), chns,
+                                             processor.m, processor.n, nchn, seed, feat)
+
+            feat = feat.transpose()
             norms = np.linalg.norm(feat, axis=0)
-            idxz = np.where(norms < delta/10)[0]
+            idxz = np.where(norms < chns[0]['rmax']/10)[0]
             if idxz.size > 0:
                 rr = idxz[idxz >= max(0, feat.shape[1] - len(idxz))].min()
                 feat = feat[:, :rr]
             feat = matstd_clip(feat, idx_fit, with_mean=stdmean)
-        elif chn.startswith('feat'):
-            dct = chn_dct[chn]
-            delta = dct.delta if type(dct.delta) is float else 1e-5
-            dct.delta = delta
-            logdelta = int(-np.log10(delta))
-            est_name = f"{chn}_l{int(dct.hop):d}_r{dct.rrz:g}_eps{logdelta:d}_{seed:g}"
-            feat, est_file = load_est('a2prop', est_name)
-            if feat is None:
-                print(f'Calculating {chn} {dct}...', flush=True)
-                processor.input(['attr_matrix'])
-                feat = processor.attr_matrix.astype(np.float32, order='C')
-                py_a2prop = A2Prop()
-                _ = py_a2prop.propagate(datastr, chn,
-                                        processor.m, processor.n, seed,
-                                        dct.hop, delta, 0, 1-dct.rrz, dct.rrz, feat)
-                np.save(est_file, feat)
+        elif chnk.startswith('feat'):
+            chns = [dmap2dct(chnk, DotMap(chnv))]
+            nchn = len(chns)
+
+            processor.input(['attr_matrix', 'deg'])
+            feat = processor.attr_matrix.transpose().astype(np.float32, order='C')
+            nfeat = feat.shape[0]
+            feat = np.repeat(feat, nchn, axis=0)
+
+            for c, chn in enumerate(chns):
+                deg_b = np.power(np.maximum(processor.deg, 1e-12), chn['rrb'])
+                idx_zero = np.where(deg_b == 0)[0]
+                assert idx_zero.size == 0, f"Isolated nodes found: {idx_zero}"
+                # deg_b[idx_zero] = 1
+                feat[c*nfeat:(c+1)*nfeat, :] /= deg_b
+
+            feat = np.ascontiguousarray(feat)
+            py_a2prop = A2Prop()
+            time_pre += py_a2prop.propagatea(os.path.join(datapath, datastr), chns,
+                                             processor.m, processor.n, nchn, seed, feat)
+
+            for c, chn in enumerate(chns):
+                feat[c*nfeat:(c+1)*nfeat, :] *= deg_b
+            feat = feat.transpose()
             feat = matstd_clip(feat, idx_fit, with_mean=stdmean)
         else:
             raise ValueError(f'Unknown channel {chn}')
@@ -155,4 +158,4 @@ def load_hetero_list(datastr: str, datapath: str,
     gc.collect()
     print(f"n={n}, m={m}, label={labels.size()} | {int(labels.max())+1})")
     print([f.shape for f in feat['train']])
-    return feat, labels, idx
+    return feat, labels, idx, time_pre
