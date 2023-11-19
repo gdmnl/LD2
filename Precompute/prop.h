@@ -49,7 +49,7 @@ namespace propagation{
         vector<uint>pl;
         vector<float>rowsum_pos;
         vector<float>rowsum_neg;
-        vector<int>feat_map;
+        vector<uint>feat_map;
         vector<float>Du_a;
         vector<float>Du_b;
         vector<float>Du;

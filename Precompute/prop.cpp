@@ -60,7 +60,7 @@ float A2prop::propagate(
 
     el = vector<uint>(m);   // edge list sorted by source node degree
     pl = vector<uint>(n + 1);
-    string dataset_el = "../data/" + dataset + "/adj_el.bin";
+    string dataset_el = dataset + "/adj_el.bin";
     const char *p1 = dataset_el.c_str();
     if (FILE *f1 = fopen(p1, "rb")) {
         size_t rtn = fread(el.data(), sizeof el[0], el.size(), f1);
@@ -71,7 +71,7 @@ float A2prop::propagate(
         cout << dataset_el << " Not Exists." << endl;
         exit(1);
     }
-    string dataset_pl = "../data/" + dataset + "/adj_pl.bin";
+    string dataset_pl = dataset + "/adj_pl.bin";
     const char *p2 = dataset_pl.c_str();
     if (FILE *f2 = fopen(p2, "rb")) {
         size_t rtn = fread(pl.data(), sizeof pl[0], pl.size(), f2);
