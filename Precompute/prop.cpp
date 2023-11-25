@@ -10,7 +10,7 @@ using namespace Eigen;
 using namespace Spectra;
 
 // ====================
-double getCurrentTime() {
+double get_curr_time() {
     long long time = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
     return static_cast<double>(time) / 1000000.0;
@@ -45,7 +45,6 @@ inline void update_maxr(const float r, float &maxrp, float &maxrn) {
 namespace propagation {
 
 void A2prop::load(string dataset, uint mm, uint nn, uint seedd) {
-    dataset_name = dataset;
     m = mm;
     n = nn;
     seed = seedd;
@@ -76,24 +75,23 @@ void A2prop::load(string dataset, uint mm, uint nn, uint seedd) {
         exit(1);
     }
 
-    Du = Eigen::ArrayXf::Zero(n);
+    deg = Eigen::ArrayXf::Zero(n);
     for (uint i = 0; i < n; i++) {
-        Du(i)   = pl[i + 1] - pl[i];
-        if (Du(i) <= 0) {
-            Du(i) = 1;
+        deg(i)   = pl[i + 1] - pl[i];
+        if (deg(i) <= 0) {
+            deg(i) = 1;
             // cout << i << " ";
         }
     }
 }
 
 
-float A2prop::propagatea(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat) {
-    nchn = nchnn;
+float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat) {
     chns = chnss;
-    assert(nchn <= 4);
-    Du_a = Eigen::ArrayX4f::Zero(n, nchn);
-    for (uint c = 0; c < nchn; c++) {
-        Du_a.col(c) = Du.pow(chns[c].rra);
+    assert(nchnn <= 4);
+    dega = Eigen::ArrayX4f::Zero(n, nchnn);
+    for (uint c = 0; c < nchnn; c++) {
+        dega.col(c) = deg.pow(chns[c].rra);
     }
 
     // cout << "feat dim: " << feat.cols() << ", nodes: " << feat.rows() << endl;
@@ -105,23 +103,23 @@ float A2prop::propagatea(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf>
     }
 
     // Feat is ColMajor, shape: (n, c*F)
-    assert(fsum % nchn == 0);
-    fdim = fsum / nchn;
-    feat_map = vector<uint>(fsum);
+    assert(fsum % nchnn == 0);
+    fdim = fsum / nchnn;
+    map_feat = vector<uint>(fsum);
     for (uint i = 0; i < fsum; i++)
-        feat_map[i] = i;
-    // random_shuffle(feat_map.begin(),feat_map.end());
+        map_feat[i] = i;
+    // random_shuffle(map_feat.begin(), map_feat.end());
 
     dlt_p = Eigen::ArrayXf::Zero(fsum);
     dlt_n = Eigen::ArrayXf::Zero(fsum);
-    for (uint c = 0; c < nchn; c++) {
+    for (uint c = 0; c < nchnn; c++) {
         for (uint i = 0; i < fdim; i++) {
             uint it = i + c * fdim;
             for (uint u = 0; u < n; u++) {
                 if (feat(u, i) > 0)
-                    dlt_p(it) += feat(u, it) * pow(Du(u), chns[c].rrb);
+                    dlt_p(it) += feat(u, it) * pow(deg(u), chns[c].rrb);
                 else
-                    dlt_n(it) += feat(u, it) * pow(Du(u), chns[c].rrb);
+                    dlt_n(it) += feat(u, it) * pow(deg(u), chns[c].rrb);
             }
             if (dlt_p(it) == 0)
                 dlt_p(it) = 1e-12;
@@ -136,7 +134,7 @@ float A2prop::propagatea(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf>
     struct timeval ttod_start, ttod_end;
     double ttod, tclk;
     gettimeofday(&ttod_start, NULL);
-    tclk = getCurrentTime();
+    tclk = get_curr_time();
     uint ti;
     int start, ends = 0;
 
@@ -155,7 +153,7 @@ float A2prop::propagatea(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf>
         threads[t].join();
     vector<thread>().swap(threads);
 
-    tclk = getCurrentTime() - tclk;
+    tclk = get_curr_time() - tclk;
     gettimeofday(&ttod_end, NULL);
     ttod = ttod_end.tv_sec - ttod_start.tv_sec + (ttod_end.tv_usec - ttod_start.tv_usec) / 1000000.0;
     cout << "Prop  time: " << ttod << " \ts, \t";
@@ -174,13 +172,13 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
 
     // Loop each feature `ift`, index `it`
     for (int it = st; it < ed; it++) {
-        const uint ift = feat_map[it];
+        const uint ift = map_feat[it];
         const uint ic = ift / fdim;
         const Channel chn = chns[ic];
         const float dlti_p = dlt_p(ift);
         const float dlti_n = dlt_n(ift);
         Eigen::Map<Eigen::VectorXf> feati(feats.col(ift).data(), n);
-        Eigen::Map<Eigen::ArrayXf> Deg_a(Du_a.col(ic).data(), n);
+        Eigen::Map<Eigen::ArrayXf> degac(dega.col(ic).data(), n);
 
         // Init residue
         res1.setZero();
@@ -209,7 +207,7 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
                 float thr_p = old / dlti_p;
                 float thr_n = old / dlti_n;
                 // <<<<< suffix'i' (Identity) p-b i-d
-                if (chn.is_i)
+                if (chn.is_idt)
                     rcurr[u] += old;
                 if (thr_p > 1 || thr_n > 1) {
                     uint im;
@@ -220,9 +218,9 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
                     const float old_t = (chn.is_adj) ? old : (-old);
                     for (im = pl[u]; im < pl[u+1]; im++) {
                         const uint v = el[im];
-                        const float da_v = Deg_a(v);
+                        const float da_v = degac(v);
                         if (thr_p > da_v || thr_n > da_v) {
-                            rcurr[v] += old_t / Du(v);
+                            rcurr[v] += old_t / deg(v);
                             update_maxr(rcurr[v], maxr_p, maxr_n);
                         } else {
                             const float ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
@@ -236,7 +234,7 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
                     const float dlti_nt = (chn.is_adj) ? dlti_n : (-dlti_n);
                     for (; im < pl[u+1]; im++) {
                         const uint v = el[im];
-                        const float da_v = Deg_a(v);
+                        const float da_v = degac(v);
                         if (thr_p > da_v) {
                             rcurr[v] += dlti_pt / da_v;
                             update_maxr(rcurr[v], maxr_p, maxr_n);
@@ -302,13 +300,12 @@ void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feats) {
     const Channel chn = chns[ic];
     const float dlti_p = feats.cwiseMax(0).sum() * chn.rmax;
     const float dlti_n = feats.cwiseMin(0).sum() * chn.rmax;
-    Eigen::Map<Eigen::ArrayXf> Deg_a(Du_a.col(ic).data(), n);
-    Eigen::ArrayXf Deg_b = Du.pow(chn.rrb);
+    Eigen::Map<Eigen::ArrayXf> degac(dega.col(ic).data(), n);
 
     // Init residue
     res1.setZero();
-    res0 = feats / Deg_b;
-    feats *= -Du;
+    res0 = feats / deg.pow(chn.rrb);
+    feats *= -deg;
     rprev = res1;
     rcurr = res0;
     float maxr_p = res0.maxCoeff();  // max positive residue
@@ -337,7 +334,7 @@ void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feats) {
                 const float old_t = (chn.is_adj) ? old : (-old);
                 for (im = pl[u]; im < pl[u+1]; im++) {
                     const uint v = el[im];
-                    const float da_v = Deg_a(v);
+                    const float da_v = degac(v);
                     if (thr_p > da_v || thr_n > da_v) {
                         rcurr[v] += old_t;
                         update_maxr(rcurr[v], maxr_p, maxr_n);
@@ -353,7 +350,7 @@ void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feats) {
                 const float dlti_nt = (chn.is_adj) ? dlti_n : (-dlti_n);
                 for (; im < pl[u+1]; im++) {
                     const uint v = el[im];
-                    const float da_v = Deg_a(v);
+                    const float da_v = degac(v);
                     if (thr_p > da_v) {
                         rcurr[v] += dlti_pt / da_v;
                         update_maxr(rcurr[v], maxr_p, maxr_n);

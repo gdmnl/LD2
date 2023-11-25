@@ -98,11 +98,13 @@ def load_hetero_list(datastr: str, datapath: str,
     idx_fit = idx['train']
     features = []
     time_pre = 0
+    py_a2prop = A2Prop()
+    py_a2prop.load(os.path.join(datapath, datastr), processor.m, processor.n, seed)
     for chnk, chnv in chn_dct.items():
         if chnk == 'attr':
             feat = np.load(os.path.join(datapath, datastr, 'feats.npy'))
             feat = matstd_clip(feat, idx_fit, with_mean=stdmean)
-        # NOTE: rewrite to unify feature and call only once
+        # TODO: rewrite to unify feature and call only once
         elif chnk.startswith('ase'):
             chns = [dmap2dct(chnk, DotMap(chnv))]
             nchn = len(chns)
@@ -110,9 +112,7 @@ def load_hetero_list(datastr: str, datapath: str,
             feat = np.zeros((chnv.r-chnv.l, processor.n), dtype=np.float32, order='C')
             feat = np.repeat(feat, nchn, axis=0)
             feat = np.ascontiguousarray(feat)
-            py_a2prop = A2Prop()
-            time_pre += py_a2prop.propagatea(os.path.join(datapath, datastr), chns,
-                                             processor.m, processor.n, nchn, seed, feat)
+            time_pre += py_a2prop.compute(nchn, chns, feat)
 
             feat = feat.transpose()
             norms = np.linalg.norm(feat, axis=0)
@@ -138,9 +138,7 @@ def load_hetero_list(datastr: str, datapath: str,
                 feat[c*nfeat:(c+1)*nfeat, :] /= deg_b
 
             feat = np.ascontiguousarray(feat)
-            py_a2prop = A2Prop()
-            time_pre += py_a2prop.propagatea(os.path.join(datapath, datastr), chns,
-                                             processor.m, processor.n, nchn, seed, feat)
+            time_pre += py_a2prop.compute(nchn, chns, feat)
 
             for c, chn in enumerate(chns):
                 feat[c*nfeat:(c+1)*nfeat, :] *= deg_b

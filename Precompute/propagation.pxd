@@ -12,7 +12,7 @@ cdef extern from "prop.h" namespace "propagation":
     cdef struct Channel:
         int type
         int powl
-        bool is_i
+        bool is_idt
         bool is_adj
 
         int L
@@ -25,4 +25,4 @@ cdef extern from "prop.h" namespace "propagation":
         A2prop() except+
         #         dataset,   m,    n, seed
         void load(string, uint, uint, uint)
-        float propagatea(uint, Channel*, Map[MatrixXf] &)
+        float compute(uint, Channel*, Map[MatrixXf] &)
