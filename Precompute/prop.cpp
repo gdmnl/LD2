@@ -90,8 +90,10 @@ float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &f
     chns = chnss;
     assert(nchnn <= 4);
     dega = Eigen::ArrayX4f::Zero(n, nchnn);
+    dinva = Eigen::ArrayX4f::Zero(n, nchnn);
     for (uint c = 0; c < nchnn; c++) {
         dega.col(c) = deg.pow(chns[c].rra);
+        dinva.col(c) = 1 / dega.col(c);
     }
 
     // cout << "feat dim: " << feat.cols() << ", nodes: " << feat.rows() << endl;
@@ -112,6 +114,8 @@ float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &f
 
     dlt_p = Eigen::ArrayXf::Zero(fsum);
     dlt_n = Eigen::ArrayXf::Zero(fsum);
+    maxf_p = Eigen::ArrayXf::Zero(fsum);
+    maxf_n = Eigen::ArrayXf::Zero(fsum);
     for (uint c = 0; c < nchnn; c++) {
         for (uint i = 0; i < fdim; i++) {
             uint it = i + c * fdim;
@@ -120,6 +124,7 @@ float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &f
                     dlt_p(it) += feat(u, it) * pow(deg(u), chns[c].rrb);
                 else
                     dlt_n(it) += feat(u, it) * pow(deg(u), chns[c].rrb);
+                update_maxr(feat(u, it), maxf_p(it), maxf_n(it));
             }
             if (dlt_p(it) == 0)
                 dlt_p(it) = 1e-12;
@@ -175,10 +180,16 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
         const uint ift = map_feat[it];
         const uint ic = ift / fdim;
         const Channel chn = chns[ic];
-        const float dlti_p = dlt_p(ift);
-        const float dlti_n = dlt_n(ift);
         Eigen::Map<Eigen::VectorXf> feati(feats.col(ift).data(), n);
         Eigen::Map<Eigen::ArrayXf> degac(dega.col(ic).data(), n);
+        Eigen::Map<Eigen::ArrayXf> dinvac(dinva.col(ic).data(), n);
+
+        const float dlti_p = dlt_p(ift);
+        const float dlti_n = dlt_n(ift);
+        const float dltinv_p = 1 / dlti_p;
+        const float dltinv_n = 1 / dlti_n;
+        float maxr_p = maxf_p(ift);     // max positive residue
+        float maxr_n = maxf_n(ift);     // max negative residue
 
         // Init residue
         res1.setZero();
@@ -188,14 +199,11 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
         // res0.swap(feats.col(ift));
         rprev = res1;
         rcurr = res0;
-        float maxr_p = res0.maxCoeff();  // max positive residue
-        float maxr_n = res0.minCoeff();  // max negative residue
 
         // Loop each hop `il`
         int il;
         for (il = 0; il < chn.L; il++) {
             // Early termination
-            // TODO: Terminate condition for all positive feat
             if ((maxr_p <= dlti_p) && (maxr_n >= dlti_n))
                 break;
             rcurr.swap(rprev);
@@ -203,25 +211,25 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
 
             // Loop each node `u`
             for (uint u = 0; u < n; u++) {
-                const float old = rprev[u];
-                float thr_p = old / dlti_p;
-                float thr_n = old / dlti_n;
+                const float old = rprev(u);
+                float thr_p = old * dltinv_p;
+                float thr_n = old * dltinv_n;
                 // <<<<< suffix'i' (Identity) p-b i-d
                 if (chn.is_idt)
-                    rcurr[u] += old;
+                    rcurr(u) += old;
                 if (thr_p > 1 || thr_n > 1) {
-                    uint im;
                     if ((chn.powl == 1) || (il % chn.powl == 1))
                         feati(u) += old;
+                    const float oldt = (chn.is_adj) ? old : (-old);
 
                     // Loop each neighbor index `im`, node `v`
-                    const float old_t = (chn.is_adj) ? old : (-old);
+                    uint im;
                     for (im = pl[u]; im < pl[u+1]; im++) {
                         const uint v = el[im];
                         const float da_v = degac(v);
                         if (thr_p > da_v || thr_n > da_v) {
-                            rcurr[v] += old_t / deg(v);
-                            update_maxr(rcurr[v], maxr_p, maxr_n);
+                            rcurr(v) += oldt / deg(v);
+                            update_maxr(rcurr(v), maxr_p, maxr_n);
                         } else {
                             const float ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
                             thr_p /= ran;
@@ -230,17 +238,18 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
                         }
                     }
 
-                    const float dlti_pt = (chn.is_adj) ? dlti_p : (-dlti_p);
-                    const float dlti_nt = (chn.is_adj) ? dlti_n : (-dlti_n);
+                    const float dltit_p = (chn.is_adj) ? dlti_p : (-dlti_p);
+                    const float dltit_n = (chn.is_adj) ? dlti_n : (-dlti_n);
                     for (; im < pl[u+1]; im++) {
                         const uint v = el[im];
                         const float da_v = degac(v);
+                        const float dinva_v = dinvac(v);
                         if (thr_p > da_v) {
-                            rcurr[v] += dlti_pt / da_v;
-                            update_maxr(rcurr[v], maxr_p, maxr_n);
+                            rcurr(v) += dltit_p * dinva_v;
+                            update_maxr(rcurr(v), maxr_p, maxr_n);
                         } else if (thr_n > da_v) {
-                            rcurr[v] += dlti_nt / da_v;
-                            update_maxr(rcurr[v], maxr_p, maxr_n);
+                            rcurr(v) += dltit_n * dinva_v;
+                            update_maxr(rcurr(v), maxr_p, maxr_n);
                         } else
                             break;
                     }
@@ -290,22 +299,25 @@ void A2prop::aseadj2(Eigen::Ref<Eigen::MatrixXf> feats, int ed) {
     cout << " Num conv: " << nconv << endl;
 }
 
-// Graph power iteration
-void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feats) {
+// Graph power iteration on one feature
+void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feati) {
     uint seedt = seed;
     Eigen::ArrayXf res0(n), res1(n);
     Eigen::Map<Eigen::ArrayXf> rprev(res1.data(), n), rcurr(res0.data(), n);
 
     const uint ic = 0;
     const Channel chn = chns[ic];
-    const float dlti_p = feats.cwiseMax(0).sum() * chn.rmax;
-    const float dlti_n = feats.cwiseMin(0).sum() * chn.rmax;
+    const float dlti_p = feati.cwiseMax(0).sum() * chn.rmax;
+    const float dlti_n = feati.cwiseMin(0).sum() * chn.rmax;
+    const float dltinv_p = 1 / dlti_p;
+    const float dltinv_n = 1 / dlti_n;
     Eigen::Map<Eigen::ArrayXf> degac(dega.col(ic).data(), n);
+    Eigen::Map<Eigen::ArrayXf> dinvac(dinva.col(ic).data(), n);
 
     // Init residue
     res1.setZero();
-    res0 = feats / deg.pow(chn.rrb);
-    feats *= -deg;
+    res0 = feati / deg.pow(chn.rrb);
+    feati *= -deg;
     rprev = res1;
     rcurr = res0;
     float maxr_p = res0.maxCoeff();  // max positive residue
@@ -315,7 +327,6 @@ void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feats) {
     int il;
     for (il = 0; il < chn.powl; il++) {
         // Early termination
-        // TODO: Terminate condition for all positive feat
         if ((maxr_p <= dlti_p) && (maxr_n >= dlti_n))
             break;
         rcurr.swap(rprev);
@@ -323,21 +334,20 @@ void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feats) {
 
         // Loop each node `u`
         for (uint u = 0; u < n; u++) {
-            const float old = rprev[u];
-            float thr_p = old / dlti_p;
-            float thr_n = old / dlti_n;
+            const float old = rprev(u);
+            float thr_p = old * dltinv_p;
+            float thr_n = old * dltinv_n;
 
             if (thr_p > 1 || thr_n > 1) {
-                uint im;
-
+                const float oldt = (chn.is_adj) ? old : (-old);
                 // Loop each neighbor index `im`, node `v`
-                const float old_t = (chn.is_adj) ? old : (-old);
+                uint im;
                 for (im = pl[u]; im < pl[u+1]; im++) {
                     const uint v = el[im];
                     const float da_v = degac(v);
                     if (thr_p > da_v || thr_n > da_v) {
-                        rcurr[v] += old_t;
-                        update_maxr(rcurr[v], maxr_p, maxr_n);
+                        rcurr(v) += oldt;
+                        update_maxr(rcurr(v), maxr_p, maxr_n);
                     } else {
                         const float ran = rand_r(&seedt) % RAND_MAX / (float)RAND_MAX;
                         thr_p /= ran;
@@ -346,17 +356,18 @@ void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feats) {
                     }
                 }
 
-                const float dlti_pt = (chn.is_adj) ? dlti_p : (-dlti_p);
-                const float dlti_nt = (chn.is_adj) ? dlti_n : (-dlti_n);
+                const float dltit_p = (chn.is_adj) ? dlti_p : (-dlti_p);
+                const float dltit_n = (chn.is_adj) ? dlti_n : (-dlti_n);
                 for (; im < pl[u+1]; im++) {
                     const uint v = el[im];
                     const float da_v = degac(v);
+                    const float dinva_v = dinvac(v);
                     if (thr_p > da_v) {
-                        rcurr[v] += dlti_pt / da_v;
-                        update_maxr(rcurr[v], maxr_p, maxr_n);
+                        rcurr(v) += dltit_p * dinva_v;
+                        update_maxr(rcurr(v), maxr_p, maxr_n);
                     } else if (thr_n > da_v) {
-                        rcurr[v] += dlti_nt / da_v;
-                        update_maxr(rcurr[v], maxr_p, maxr_n);
+                        rcurr(v) += dltit_n * dinva_v;
+                        update_maxr(rcurr(v), maxr_p, maxr_n);
                     } else
                         break;
                 }
@@ -364,7 +375,7 @@ void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feats) {
         }
     }
 
-    feats += rcurr;
+    feati += rcurr;
 }
 
 

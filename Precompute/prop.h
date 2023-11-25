@@ -68,8 +68,9 @@ namespace propagation{
 
         Channel* chns;
         Eigen::ArrayXf deg;
-        Eigen::ArrayX4f dega;
+        Eigen::ArrayX4f dega, dinva;
         Eigen::ArrayXf dlt_p, dlt_n;
+        Eigen::ArrayXf maxf_p, maxf_n;
 
         void load(string dataset, uint mm, uint nn, uint seedd);
         float compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat);
