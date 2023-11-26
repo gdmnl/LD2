@@ -15,8 +15,9 @@ cdef extern from "prop.h" namespace "propagation":
         bool is_idt
         bool is_adj
 
-        int L
-        float rmax
+        int hop
+        int dim
+        float delta
         float alpha
         float rra
         float rrb

@@ -43,7 +43,7 @@ inline void update_maxr(const float r, float &maxrp, float &maxrn) {
 
 // ====================
 namespace propagation {
-
+// Load graph related data
 void A2prop::load(string dataset, uint mm, uint nn, uint seedd) {
     m = mm;
     n = nn;
@@ -85,7 +85,7 @@ void A2prop::load(string dataset, uint mm, uint nn, uint seedd) {
     }
 }
 
-
+// Computation call entry
 float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat) {
     chns = chnss;
     assert(nchnn <= 4);
@@ -96,7 +96,7 @@ float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &f
         dinva.col(c) = 1 / dega.col(c);
     }
 
-    // cout << "feat dim: " << feat.cols() << ", nodes: " << feat.rows() << endl;
+    cout << "feat dim: " << feat.cols() << ", nodes: " << feat.rows() << endl;
     const uint fsum = feat.cols();
     if (chns[0].type < 0) {
         // TODO: parallel and clocking
@@ -107,10 +107,8 @@ float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &f
     // Feat is ColMajor, shape: (n, c*F)
     assert(fsum % nchnn == 0);
     fdim = fsum / nchnn;
-    map_feat = vector<uint>(fsum);
-    for (uint i = 0; i < fsum; i++)
-        map_feat[i] = i;
-    // random_shuffle(map_feat.begin(), map_feat.end());
+    map_feat = Eigen::ArrayXf::LinSpaced(fsum, 0, fsum - 1);
+    // random_shuffle(map_feat.data(), map_feat.data() + map_feat.size());
 
     dlt_p = Eigen::ArrayXf::Zero(fsum);
     dlt_n = Eigen::ArrayXf::Zero(fsum);
@@ -130,8 +128,8 @@ float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &f
                 dlt_p(it) = 1e-12;
             if (dlt_n(it) == 0)
                 dlt_n(it) = -1e-12;
-            dlt_p(it) *= chns[c].rmax;
-            dlt_n(it) *= chns[c].rmax;
+            dlt_p(it) *= chns[c].delta;
+            dlt_n(it) *= chns[c].delta;
         }
     }
 
@@ -168,6 +166,36 @@ float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &f
     return ttod;
 }
 
+// ASE wrapper
+void A2prop::aseadj2(Eigen::Ref<Eigen::MatrixXf> feats, int ed) {
+    ApproxAdjProd op(*this);
+    assert(ed <= feats.cols());
+    int nev = min(ed+(int)floor(ed*2/chns[0].hop), op.cols());
+    SymEigsSolver<ApproxAdjProd> eigs(op, ed, nev);
+
+    // Max iter hop (max oper hop*nev), relative error 1e-2
+    SortRule sorting = SortRule::LargestAlge;
+    // SortRule sorting = SortRule::LargestMagn;
+    eigs.init();
+    int nconv = eigs.compute(sorting, chns[0].hop, 1e-2);
+
+    Eigen::VectorXf evalues;
+    evalues = eigs.eigenvalues();
+    feats = eigs.eigenvectors(feats.cols());
+    for (int i = 0; i < feats.cols(); i++) {
+        if (i < nconv) {
+            feats.col(i) *= sqrtf(fabs(evalues[i]));
+        }
+        else {
+            feats.col(i).setZero();
+        }
+    }
+
+    // cout << "Eigenvalues: " << evalues.transpose() << endl;
+    cout << " Num iter: " << eigs.num_iterations() << " Num oper: " << eigs.num_operations();
+    cout << " Num conv: " << nconv << endl;
+}
+
 // ====================
 // Feature embs
 void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
@@ -177,7 +205,7 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
 
     // Loop each feature `ift`, index `it`
     for (int it = st; it < ed; it++) {
-        const uint ift = map_feat[it];
+        const uint ift = map_feat(it);
         const uint ic = ift / fdim;
         const Channel chn = chns[ic];
         Eigen::Map<Eigen::VectorXf> feati(feats.col(ift).data(), n);
@@ -202,7 +230,7 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
 
         // Loop each hop `il`
         int il;
-        for (il = 0; il < chn.L; il++) {
+        for (il = 0; il < chn.hop; il++) {
             // Early termination
             if ((maxr_p <= dlti_p) && (maxr_n >= dlti_n))
                 break;
@@ -269,36 +297,6 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
     }
 }
 
-// ASE wrapper
-void A2prop::aseadj2(Eigen::Ref<Eigen::MatrixXf> feats, int ed) {
-    ApproxAdjProd op(*this);
-    assert(ed <= feats.cols());
-    int nev = min(ed+(int)floor(ed*2/chns[0].L), op.cols());
-    SymEigsSolver<ApproxAdjProd> eigs(op, ed, nev);
-
-    // Max iter L (max oper L*nev), relative error 1e-2
-    SortRule sorting = SortRule::LargestAlge;
-    // SortRule sorting = SortRule::LargestMagn;
-    eigs.init();
-    int nconv = eigs.compute(sorting, chns[0].L, 1e-2);
-
-    Eigen::VectorXf evalues;
-    evalues = eigs.eigenvalues();
-    feats = eigs.eigenvectors(feats.cols());
-    for (int i = 0; i < feats.cols(); i++) {
-        if (i < nconv) {
-            feats.col(i) *= sqrtf(fabs(evalues[i]));
-        }
-        else {
-            feats.col(i).setZero();
-        }
-    }
-
-    // cout << "Eigenvalues: " << evalues.transpose() << endl;
-    cout << " Num iter: " << eigs.num_iterations() << " Num oper: " << eigs.num_operations();
-    cout << " Num conv: " << nconv << endl;
-}
-
 // Graph power iteration on one feature
 void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feati) {
     uint seedt = seed;
@@ -307,8 +305,8 @@ void A2prop::prod_chn(Eigen::Ref<Eigen::ArrayXf> feati) {
 
     const uint ic = 0;
     const Channel chn = chns[ic];
-    const float dlti_p = feati.cwiseMax(0).sum() * chn.rmax;
-    const float dlti_n = feati.cwiseMin(0).sum() * chn.rmax;
+    const float dlti_p = feati.cwiseMax(0).sum() * chn.delta;
+    const float dlti_n = feati.cwiseMin(0).sum() * chn.delta;
     const float dltinv_p = 1 / dlti_p;
     const float dltinv_n = 1 / dlti_n;
     Eigen::Map<Eigen::ArrayXf> degac(dega.col(ic).data(), n);

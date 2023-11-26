@@ -55,15 +55,16 @@ def diag_mul(diag, m):
     return m
 
 
-def dmap2dct(chnname: str, dmap: DotMap):
+def dmap2dct(chnname: str, dmap: DotMap, processor: DataProcess):
     typedct = {'aseadj': -1, 'aseadj2': -2,
                'featadj': 0, 'featadji': 1, 'featadj2': 2, 'featadj2i': 3,
                'featlap': 4, 'featlapi': 5, 'featlap2': 6, 'featlap2i': 7,}
 
     dct = {}
     dct['type'] = typedct[chnname]
-    dct['L'] = dmap.hop
-    dct['rmax'] =  dmap.delta if type(dmap.delta) is float else 1e-5
+    dct['hop'] = dmap.hop
+    dct['dim'] = dmap.r - dmap.l if type(dmap.r) is int else processor.nfeat
+    dct['delta'] = dmap.delta if type(dmap.delta) is float else 1e-5
     dct['alpha'] = dmap.alpha if type(dmap.alpha) is float else 0
     dct['rra'] = (1 - dmap.rrz) if type(dmap.rrz) is float else 0
     dct['rrb'] = dmap.rrz if type(dmap.rrz) is float else 0
@@ -76,7 +77,7 @@ def load_hetero_list(datastr: str, datapath: str,
                    seed: int=0, stdmean: bool=True):
     # Get degree and label
     processor = DataProcess(datastr, path=datapath, seed=seed)
-    processor.input(['labels'])
+    processor.input(['labels', 'attr_matrix', 'deg'])
     if multil:
         processor.calculate(['labels_oh'])
         labels = torch.LongTensor(processor.labels_oh)
@@ -90,70 +91,87 @@ def load_hetero_list(datastr: str, datapath: str,
     idx = {'train': torch.LongTensor(processor.idx_train),
            'val':   torch.LongTensor(processor.idx_val),
            'test':  torch.LongTensor(processor.idx_test)}
+    idx_fit = idx['train']
     # Get graph property
     n, m = processor.n, processor.m
     # print(processor)
-
-    # Load feature
-    idx_fit = idx['train']
-    features = []
-    time_pre = 0
     py_a2prop = A2Prop()
     py_a2prop.load(os.path.join(datapath, datastr), processor.m, processor.n, seed)
+
+    # Preprocess feature
+    # TODO: reduce memory usage to CnF
+    feat_lst = []
+    feat_cat = None
+    chns = []
     for chnk, chnv in chn_dct.items():
         if chnk == 'attr':
-            feat = np.load(os.path.join(datapath, datastr, 'feats.npy'))
+            feat = processor.attr_matrix.astype(np.float32)
             feat = matstd_clip(feat, idx_fit, with_mean=stdmean)
-        # TODO: rewrite to unify feature and call only once
+            feat_lst.append(feat)
         elif chnk.startswith('ase'):
-            chns = [dmap2dct(chnk, DotMap(chnv))]
-            nchn = len(chns)
+            chn = dmap2dct(chnk, DotMap(chnv), processor)
+            chns.append(chn)
 
-            feat = np.zeros((chnv.r-chnv.l, processor.n), dtype=np.float32, order='C')
-            feat = np.repeat(feat, nchn, axis=0)
-            feat = np.ascontiguousarray(feat)
-            time_pre += py_a2prop.compute(nchn, chns, feat)
+            feat = np.zeros((chn.dim, processor.n), dtype=np.float32)
+            feat_cat = np.vstack((feat_cat, feat)) if feat_cat is not None else feat
+        elif chnk.startswith('feat'):
+            chn = dmap2dct(chnk, DotMap(chnv), processor)
+            chns.append(chn)
 
-            feat = feat.transpose()
+            feat = processor.attr_matrix.transpose().astype(np.float32)
+            deg_b = np.power(np.maximum(processor.deg, 1e-12), chn['rrb'])
+            idx_zero = np.where(deg_b == 0)[0]
+            assert idx_zero.size == 0, f"Isolated nodes found: {idx_zero}"
+            # deg_b[idx_zero] = 1
+            feat /= deg_b
+            feat_cat = np.vstack((feat_cat, feat)) if feat_cat is not None else feat
+
+    # Propagate feature
+    time_pre = 0
+    feat_cat = np.ascontiguousarray(feat_cat)
+    time_pre += py_a2prop.compute(len(chns), chns, feat_cat)
+
+    # Postprocess feature
+    dim_top = 0
+    for chn in chns:
+        if chn['type'] < 0:     # startswith('ase')
+            feat = feat_cat[dim_top:dim_top+chn['dim'], :].transpose()
+            dim_top += chn['dim']
+
             norms = np.linalg.norm(feat, axis=0)
-            idxz = np.where(norms < chns[0]['rmax']/10)[0]
+            idxz = np.where(norms < chn['delta']/10)[0]
             if idxz.size > 0:
                 rr = idxz[idxz >= max(0, feat.shape[1] - len(idxz))].min()
                 feat = feat[:, :rr]
             feat = matstd_clip(feat, idx_fit, with_mean=stdmean)
-        elif chnk.startswith('feat'):
-            chns = [dmap2dct(chnk, DotMap(chnv))]
-            nchn = len(chns)
+        else:                   # startswith('feat')
+            feat = feat_cat[dim_top:dim_top+chn['dim'], :]
+            dim_top += chn['dim']
 
-            processor.input(['attr_matrix', 'deg'])
-            feat = processor.attr_matrix.transpose().astype(np.float32, order='C')
-            nfeat = feat.shape[0]
-            feat = np.repeat(feat, nchn, axis=0)
-
-            for c, chn in enumerate(chns):
-                deg_b = np.power(np.maximum(processor.deg, 1e-12), chn['rrb'])
-                idx_zero = np.where(deg_b == 0)[0]
-                assert idx_zero.size == 0, f"Isolated nodes found: {idx_zero}"
-                # deg_b[idx_zero] = 1
-                feat[c*nfeat:(c+1)*nfeat, :] /= deg_b
-
-            feat = np.ascontiguousarray(feat)
-            time_pre += py_a2prop.compute(nchn, chns, feat)
-
-            for c, chn in enumerate(chns):
-                feat[c*nfeat:(c+1)*nfeat, :] *= deg_b
+            deg_b = np.power(np.maximum(processor.deg, 1e-12), chn['rrb'])
+            feat *= deg_b
+            print(feat[[0,1,12,13,14], :10])
             feat = feat.transpose()
             feat = matstd_clip(feat, idx_fit, with_mean=stdmean)
-        else:
-            raise ValueError(f'Unknown channel {chn}')
-        # Append feature
-        features.append(feat)
+        feat_lst.append(feat)
+    del feat_cat
 
-    feat = {'val':  [torch.FloatTensor(f[idx['val']]) for f in features],
-            'test': [torch.FloatTensor(f[idx['test']]) for f in features]}
-    feat['train'] = [torch.FloatTensor(f[idx['train']]) for f in features]
-    del features
+    feat = {'val':  [torch.FloatTensor(f[idx['val']]) for f in feat_lst],
+            'test': [torch.FloatTensor(f[idx['test']]) for f in feat_lst]}
+    feat['train'] = [torch.FloatTensor(f[idx['train']]) for f in feat_lst]
+    del feat_lst
     gc.collect()
     print(f"n={n}, m={m}, label={labels.size()} | {int(labels.max())+1})")
     print([f.shape for f in feat['train']])
     return feat, labels, idx, time_pre
+
+
+if __name__ == '__main__':
+    chn_dct = {
+        "featlapi": {
+            "hop": 20,
+            "rrz": 1.0
+        }
+    }
+    chn_dct = DotMap(chn_dct)
+    load_hetero_list('reddit', '../data_1/', False, chn_dct, 0)

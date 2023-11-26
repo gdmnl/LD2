@@ -48,12 +48,13 @@ namespace propagation{
             // ADJ, ADJi, ADJ2, ADJi2,
             // 4    5     6     7
             // LAP, LAPi, LAP2, LAPi2
-        int powl;                   // suffix'2': hop for one prop
+        int powl;                   // suffix'2': prop power in one prop
         bool is_idt;                // suffix'i': add identity
         bool is_adj;                // 'ADJ' or 'LAP'
 
-        int L;                      // propagation hop
-        float rmax;                 // absolute error
+        int hop;                    // propagation hop
+        int dim;                    // feature dimension
+        float delta;                // absolute error
         float alpha;                // summation decay
         float rra, rrb;             // left & right normalization
     };
@@ -64,7 +65,7 @@ namespace propagation{
         uint fdim;                  // feature dimension
         vector<uint> el;
         vector<uint> pl;
-        vector<uint> map_feat;
+        Eigen::ArrayXf map_feat;    // permuted index -> index in feats
 
         Channel* chns;
         Eigen::ArrayXf deg;

@@ -31,8 +31,9 @@ cdef class A2Prop:
 				c_chns[i].is_idt = False
 				c_chns[i].is_adj = (chns[i]['type'] > -3)
 
-			c_chns[i].L = chns[i]['L']
-			c_chns[i].rmax = chns[i]['rmax']
+			c_chns[i].hop = chns[i]['hop']
+			c_chns[i].dim = chns[i]['dim']
+			c_chns[i].delta = chns[i]['delta']
 			c_chns[i].alpha = chns[i]['alpha']
 			c_chns[i].rra = chns[i]['rra']
 			c_chns[i].rrb = chns[i]['rrb']
