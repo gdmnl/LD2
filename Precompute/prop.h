@@ -62,16 +62,16 @@ namespace propagation{
     class A2prop{
     public:
     	uint m,n,seed;              // edges, nodes, seed
-        uint fdim;                  // feature dimension
         vector<uint> el;
         vector<uint> pl;
         Eigen::ArrayXf map_feat;    // permuted index -> index in feats
+        Eigen::ArrayXi map_chn;     // index in chns -> channel type
 
-        Channel* chns;
-        Eigen::ArrayXf deg;
-        Eigen::ArrayX4f dega, dinva;
-        Eigen::ArrayXf dlt_p, dlt_n;
-        Eigen::ArrayXf maxf_p, maxf_n;
+        Channel* chns;                  // channel schemes
+        Eigen::ArrayXf deg;             // node degree vector
+        Eigen::ArrayX4f dega, dinva;    // left-norm degree, inversed deg_a
+        Eigen::ArrayXf dlt_p, dlt_n;    // absolute error (positive, negative)
+        Eigen::ArrayXf maxf_p, maxf_n;  // max feature coefficient
 
         void load(string dataset, uint mm, uint nn, uint seedd);
         float compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat);

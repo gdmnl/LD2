@@ -112,7 +112,8 @@ def load_hetero_list(datastr: str, datapath: str,
             chn = dmap2dct(chnk, DotMap(chnv), processor)
             chns.append(chn)
 
-            feat = np.zeros((chn.dim, processor.n), dtype=np.float32)
+            feat = np.zeros((chn['dim'], processor.n), dtype=np.float32)
+            # NOTE: ensure 'ase' is ahead of 'feat'
             feat_cat = np.vstack((feat_cat, feat)) if feat_cat is not None else feat
         elif chnk.startswith('feat'):
             chn = dmap2dct(chnk, DotMap(chnv), processor)
@@ -150,7 +151,6 @@ def load_hetero_list(datastr: str, datapath: str,
 
             deg_b = np.power(np.maximum(processor.deg, 1e-12), chn['rrb'])
             feat *= deg_b
-            print(feat[[0,1,12,13,14], :10])
             feat = feat.transpose()
             feat = matstd_clip(feat, idx_fit, with_mean=stdmean)
         feat_lst.append(feat)
@@ -162,16 +162,21 @@ def load_hetero_list(datastr: str, datapath: str,
     del feat_lst
     gc.collect()
     print(f"n={n}, m={m}, label={labels.size()} | {int(labels.max())+1})")
-    print([f.shape for f in feat['train']])
+    print([list(f.shape) for f in feat['train']])
     return feat, labels, idx, time_pre
 
 
 if __name__ == '__main__':
     chn_dct = {
+        "aseadj2": {
+            "hop": 20,
+            "l": 0,
+            "r": 512
+        },
         "featlapi": {
             "hop": 20,
             "rrz": 1.0
         }
     }
     chn_dct = DotMap(chn_dct)
-    load_hetero_list('reddit', '../data_1/', False, chn_dct, 0)
+    load_hetero_list('actor', '../data/', False, chn_dct, 0)

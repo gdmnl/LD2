@@ -48,8 +48,7 @@ If you find this work useful, please cite our paper:
 [tolokers](https://github.com/yandex-research/heterophilous-graphs) | [Others - LINKX](https://github.com/CUAI/Non-Homophily-Large-Scale)
 
 ## TODOs
-NOTE (2023-11-20): the current version has different propagation computation due to some new optimization strategies, which may cause accuracy and speed differences. We will update the code soon. 
+NOTE (2023-11-26): the current version has different propagation computation due to some new optimization strategies, which may cause speed differences. We will update the code soon. 
 
 * [ ] Adj propagation parallel and clocking
-* [ ] Unify feature and one-time propagation
 * [ ] Upload dataset configs 

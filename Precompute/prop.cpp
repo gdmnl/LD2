@@ -87,6 +87,7 @@ void A2prop::load(string dataset, uint mm, uint nn, uint seedd) {
 
 // Computation call entry
 float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &feat) {
+    // Node-specific array
     chns = chnss;
     assert(nchnn <= 4);
     dega = Eigen::ArrayX4f::Zero(n, nchnn);
@@ -96,27 +97,22 @@ float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &f
         dinva.col(c) = 1 / dega.col(c);
     }
 
-    cout << "feat dim: " << feat.cols() << ", nodes: " << feat.rows() << endl;
-    const uint fsum = feat.cols();
-    if (chns[0].type < 0) {
-        // TODO: parallel and clocking
-        aseadj2(feat, fsum);
-        return 0;
-    }
-
     // Feat is ColMajor, shape: (n, c*F)
-    assert(fsum % nchnn == 0);
-    fdim = fsum / nchnn;
+    int fsum = feat.cols();
+    int it = 0;
     map_feat = Eigen::ArrayXf::LinSpaced(fsum, 0, fsum - 1);
     // random_shuffle(map_feat.data(), map_feat.data() + map_feat.size());
+    cout << "feat dim: " << feat.cols() << ", nodes: " << feat.rows() << endl;
 
+    // Feature-specific array
     dlt_p = Eigen::ArrayXf::Zero(fsum);
     dlt_n = Eigen::ArrayXf::Zero(fsum);
     maxf_p = Eigen::ArrayXf::Zero(fsum);
     maxf_n = Eigen::ArrayXf::Zero(fsum);
+    map_chn = Eigen::ArrayXi::Zero(fsum);
+    // Loop each feature index `it`, inside channel index `i`
     for (uint c = 0; c < nchnn; c++) {
-        for (uint i = 0; i < fdim; i++) {
-            uint it = i + c * fdim;
+        for (int i = 0; i < chns[c].dim; i++) {
             for (uint u = 0; u < n; u++) {
                 if (feat(u, i) > 0)
                     dlt_p(it) += feat(u, it) * pow(deg(u), chns[c].rrb);
@@ -130,24 +126,33 @@ float A2prop::compute(uint nchnn, Channel* chnss, Eigen::Map<Eigen::MatrixXf> &f
                 dlt_n(it) = -1e-12;
             dlt_p(it) *= chns[c].delta;
             dlt_n(it) *= chns[c].delta;
+            map_chn(it) = c;
+            it++;
         }
     }
 
     // Begin propagation
+    // TODO: parallel and clocking
+    int dim_top = 0;
+    if (chns[0].type < 0) {
+        aseadj2(feat(Eigen::all, Eigen::seqN(dim_top, dim_top+chns[0].dim)), chns[0].dim);
+        dim_top += chns[0].dim;
+        fsum -= chns[0].dim;
+    }
+
     struct timeval ttod_start, ttod_end;
     double ttod, tclk;
     gettimeofday(&ttod_start, NULL);
     tclk = get_curr_time();
-    uint ti;
-    int start, ends = 0;
+    int start, ends = dim_top;
 
     vector<thread> threads;
-    for (ti = 1; ti <= fsum % NUMTHREAD; ti++) {
+    for (it = 1; it <= fsum % NUMTHREAD; it++) {
         start = ends;
         ends += ceil((float)fsum / NUMTHREAD);
         threads.push_back(thread(&A2prop::feat_chn, this, feat, start, ends));
     }
-    for (; ti <= NUMTHREAD; ti++) {
+    for (; it <= NUMTHREAD; it++) {
         start = ends;
         ends += fsum / NUMTHREAD;
         threads.push_back(thread(&A2prop::feat_chn, this, feat, start, ends));
@@ -191,6 +196,7 @@ void A2prop::aseadj2(Eigen::Ref<Eigen::MatrixXf> feats, int ed) {
         }
     }
 
+    cout << "<aseadj2>";
     // cout << "Eigenvalues: " << evalues.transpose() << endl;
     cout << " Num iter: " << eigs.num_iterations() << " Num oper: " << eigs.num_operations();
     cout << " Num conv: " << nconv << endl;
@@ -206,7 +212,7 @@ void A2prop::feat_chn(Eigen::Ref<Eigen::MatrixXf> feats, int st, int ed) {
     // Loop each feature `ift`, index `it`
     for (int it = st; it < ed; it++) {
         const uint ift = map_feat(it);
-        const uint ic = ift / fdim;
+        const uint ic = map_chn(ift);
         const Channel chn = chns[ic];
         Eigen::Map<Eigen::VectorXf> feati(feats.col(ift).data(), n);
         Eigen::Map<Eigen::ArrayXf> degac(dega.col(ic).data(), n);
